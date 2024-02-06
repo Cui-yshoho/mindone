@@ -7,12 +7,12 @@ import numpy as np
 from gm.modules.diffusionmodules.openaimodel import Timestep
 from gm.modules.embedders.chinese_clip import BertConfig, BertModel
 from gm.modules.embedders.clip import CLIPTextModel
+from gm.modules.embedders.open_clip import create_model as openclip_create_model
+from gm.modules.embedders.open_clip import tokenize as openclip_tokenize
 
 # OpenCLIP model
-from gm.modules.embedders.open_clip import create_model as openclip_create_model
-from gm.modules.embedders.open_clip import lpw_tokenize as lpw_openclip_tokenize
-from gm.modules.embedders.open_clip import tokenize as openclip_tokenize
-from gm.util import count_params, expand_dims_like, get_text_index, instantiate_from_config
+from gm.modules.embedders.open_clip.tokenizer import SimpleTokenizer
+from gm.util import count_params, expand_dims_like, instantiate_from_config
 from omegaconf import ListConfig
 
 # CLIP & Chinese-CLIP model
@@ -29,8 +29,117 @@ class AbstractEmbModel(nn.Cell):
         self._ucg_rate = None
         self._input_key = None
 
-    def tokenize(self, x, lpw=False, max_embeddings_multiples=4):
+    def tokenize(self, x):
         return x, None
+
+    def lpw_tokenize(
+        self, tokenizer, texts: Union[str, List[str]], context_length: int = 77, max_embeddings_multiples: int = 3
+    ) -> [np.ndarray, np.ndarray]:
+        """
+        Returns the tokenized representation of given input string(s)
+
+        Parameters
+        ----------
+        texts : Union[str, List[str]]
+            An input string or a list of input strings to tokenize
+        context_length : int
+            The context length to use; all CLIP models use 77 as the context length
+        max_embeddings_multiples : int
+            The max multiple length of prompt embeddings compared to the max output length of text encoder;
+            all CLIP models use 3 (defaults) as max_embeddings_multiples
+        Returns
+        -------
+        A two-dimensional tensor containing the resulting tokens, shape = [number of input strings, context_length]
+        """
+        if isinstance(texts, str):
+            texts = [texts]
+        max_length = (context_length - 2) * max_embeddings_multiples + 2
+
+        if tokenizer is None or isinstance(tokenizer, SimpleTokenizer):
+            if tokenizer is None:
+                tokenizer = SimpleTokenizer()
+            bos, eos = tokenizer.encoder["<start_of_text>"], tokenizer.encoder["<end_of_text>"]
+            pad = 0
+        else:
+            bos, eos = tokenizer.bos_token_id, tokenizer.eos_token_id
+            pad = eos
+
+        prompt_tokens = [tokenizer.encode(text) for text in texts]
+        # The difference between SimpleTokenizer and other tokenizer
+        prompt_tokens = [token[1:-1] if token[0] == bos and token[-1] == eos else token for token in prompt_tokens]
+        # Truncation
+        prompt_tokens = [token if len(token) <= max_length - 2 else token[: max_length - 2] for token in prompt_tokens]
+        prompt_tokens_length = np.array([len(p) + 2 for p in prompt_tokens], np.int32)
+        # Get max_embeddings_multiples by the length of prompt_tokens
+        max_length = max([len(token) for token in prompt_tokens])
+        max_embeddings_multiples = min(
+            max_embeddings_multiples,
+            (max_length - 1) // (context_length - 2) + 1,
+        )
+        max_embeddings_multiples = max(1, max_embeddings_multiples)
+        max_length = (context_length - 2) * max_embeddings_multiples + 2
+        # Pad the tokens (with starting and ending tokens) to max_length.
+        # Insert padding token after eos
+        for i in range(len(prompt_tokens)):
+            prompt_tokens[i] = [bos] + prompt_tokens[i] + [eos] + [pad] * (max_length - 1 - len(prompt_tokens[i]) - 1)
+        prompt_tokens = np.array(prompt_tokens, np.int32)
+
+        return prompt_tokens, prompt_tokens_length
+
+    def get_unweighted_text_embeddings(self, tokens, context_length: int = 77, max_embeddings_multiples: int = 3):
+        last_hidden_state_all = []
+        hidden_states_all = []
+        last_hidden_state, pooler_output, hidden_states = None, None, None
+        for i in range(max_embeddings_multiples):
+            # extract the i-th chunk
+            text_input_chunk = tokens[:, i * (context_length - 2) : (i + 1) * (context_length - 2) + 2].copy()
+            # cover the head and the tail by the starting and the ending tokens
+            text_input_chunk[:, 0] = tokens[0, 0]
+            text_input_chunk[:, -1] = tokens[0, -1]
+            if hasattr(self, "legacy"):
+                x = self.model.token_embedding(text_input_chunk)  # [batch_size, n_ctx, d_model]
+                x = x + self.model.positional_embedding
+                x = x.transpose(1, 0, 2)  # NLD -> LND
+                last, penultimate = self.text_transformer_forward(x, attn_mask=self.model.attn_mask)
+                last_hidden_state = self.model.ln_final(last)
+                penultimate_hidden_state = self.model.ln_final(penultimate)
+                hidden_states = [last_hidden_state, penultimate_hidden_state]
+            else:
+                (last_hidden_state, _, hidden_states, _) = self.embedding(
+                    input_ids=text_input_chunk, output_hidden_states=(self.layer == "hidden")
+                )
+            if i == 0:
+                # discard the ending token
+                last_hidden_state = last_hidden_state[:, :-1]
+                hidden_states = hidden_states[self.layer_idx][:, :-1]
+            elif i == max_embeddings_multiples - 1:
+                # discard the starting token
+                last_hidden_state = last_hidden_state[:, 1:]
+                hidden_states = hidden_states[self.layer_idx][:, 1:]
+            else:
+                # discard both starting and ending tokens
+                last_hidden_state = last_hidden_state[:, 1:-1]
+                hidden_states = hidden_states[self.layer_idx][:, 1:-1]
+            last_hidden_state_all.append(last_hidden_state)
+            hidden_states_all.append(hidden_states)
+        last_hidden_state = ops.concat(last_hidden_state_all, axis=1)
+        hidden_states = ops.concat(hidden_states_all, axis=1)
+        if hasattr(self, "legacy"):
+            pooler_output = self.pool(last_hidden_state, tokens)
+        else:
+            pooler_output = last_hidden_state[
+                ops.arange(last_hidden_state.shape[0]),
+                tokens.argmax(axis=-1),
+            ]
+        if self.layer == "last":
+            z = last_hidden_state
+        elif self.layer == "pooled":
+            z = pooler_output[:, None, :]
+        else:
+            z = hidden_states
+        if self.return_pooled:
+            return z, pooler_output
+        return z
 
     @property
     def is_trainable(self) -> bool:
@@ -122,19 +231,29 @@ class GeneralConditioner(nn.Cell):
                 batch[embedder.input_key][i] = val
         return batch
 
-    def tokenize(self, batch: Dict, lpw=False, max_embeddings_multiples=4):
+    def tokenize(self, batch: Dict, lpw=False, max_embeddings_multiples=3):
         tokens, lengths = [], []
         for embedder in self.embedders:
             if hasattr(embedder, "input_key") and (embedder.input_key is not None):
                 if embedder.legacy_ucg_val is not None:
                     batch = self.possibly_get_ucg_val(embedder, batch)
-                emb_token, emb_length = embedder.tokenize(
-                    batch[embedder.input_key], lpw=lpw, max_embeddings_multiples=max_embeddings_multiples
-                )
+                if lpw and hasattr(embedder, "max_length"):
+                    emb_token, emb_length = embedder.lpw_tokenize(
+                        embedder.tokenizer if hasattr(embedder, "tokenizer") else None,
+                        batch[embedder.input_key],
+                        max_embeddings_multiples=max_embeddings_multiples,
+                    )
+                else:
+                    emb_token, emb_length = embedder.tokenize(batch[embedder.input_key])
             elif hasattr(embedder, "input_keys"):
-                emb_token, emb_length = embedder.tokenize(
-                    *[batch[k] for k in embedder.input_keys], lpw=lpw, max_embeddings_multiples=max_embeddings_multiples
-                )
+                if lpw and hasattr(embedder, "max_length"):
+                    emb_token, emb_length = embedder.lpw_tokenize(
+                        embedder.tokenizer if hasattr(embedder, "tokenizer") else None,
+                        *[batch[k] for k in embedder.input_keys],
+                        max_embeddings_multiples=max_embeddings_multiples,
+                    )
+                else:
+                    emb_token, emb_length = embedder.tokenize(*[batch[k] for k in embedder.input_keys])
             else:
                 raise AttributeError("embedder does not have attribute input_key/input_keys.")
 
@@ -210,7 +329,7 @@ class GeneralConditioner(nn.Cell):
         return vector, crossattn, concat
 
     def tokenize_embedding(
-        self, batch: Dict, force_zero_embeddings: Optional[List] = None, lpw=False, max_embeddings_multiples=4
+        self, batch: Dict, force_zero_embeddings: Optional[List] = None, lpw=False, max_embeddings_multiples=3
     ) -> Dict:
         # tokenize
         tokens, _ = self.tokenize(batch, lpw=lpw, max_embeddings_multiples=max_embeddings_multiples)
@@ -230,7 +349,7 @@ class GeneralConditioner(nn.Cell):
         return vector, crossattn, concat
 
     def get_unconditional_conditioning(
-        self, batch_c, batch_uc=None, force_uc_zero_embeddings=None, lpw=False, max_embeddings_multiples=4
+        self, batch_c, batch_uc=None, force_uc_zero_embeddings=None, lpw=False, max_embeddings_multiples=3
     ):
         if force_uc_zero_embeddings is None:
             force_uc_zero_embeddings = []
@@ -288,86 +407,37 @@ class FrozenCLIPEmbedder(AbstractEmbModel):
         for _, p in self.parameters_and_names():
             p.requires_grad = False
 
-    def tokenize(self, text, lpw=False, max_embeddings_multiples=4):
-        if lpw:
-            tokens, length = get_text_index(self.tokenizer, text, max_embeddings_multiples)
-        else:
-            batch_encoding = self.tokenizer(
-                text,
-                truncation=True,
-                max_length=self.max_length,
-                return_length=True,
-                return_overflowing_tokens=False,
-                padding="max_length",
-            )
-            tokens = np.array(batch_encoding["input_ids"], np.int32)
-            length = np.array(batch_encoding["length"], np.int32)
+    def tokenize(self, text):
+        batch_encoding = self.tokenizer(
+            text,
+            truncation=True,
+            max_length=self.max_length,
+            return_length=True,
+            return_overflowing_tokens=False,
+            padding="max_length",
+        )
+        tokens = np.array(batch_encoding["input_ids"], np.int32)
+        length = np.array(batch_encoding["length"], np.int32)
         return tokens, length
 
-    def get_unweighted_text_embeddings_SDXL1(self, tokens):
+    @ms.jit
+    def construct(self, tokens):
         max_embeddings_multiples = (tokens.shape[1] - 2) // (self.max_length - 2)
         if max_embeddings_multiples > 1:
-            last_hidden_state_all = []
-            hidden_states_all = []
-            last_hidden_state, pooler_output, hidden_states = None, None, None
-            for i in range(max_embeddings_multiples):
-                # extract the i-th chunk
-                text_input_chunk = tokens[:, i * (self.max_length - 2) : (i + 1) * (self.max_length - 2) + 2].copy()
-                # cover the head and the tail by the starting and the ending tokens
-                text_input_chunk[:, 0] = tokens[0, 0]
-                text_input_chunk[:, -1] = tokens[0, -1]
-                (last_hidden_state, pooler_output, hidden_states, attentions) = self.embedding(
-                    input_ids=text_input_chunk, output_hidden_states=(self.layer == "hidden")
-                )
-                # no_boseos_middle
-                if i == 0:
-                    # discard the ending token
-                    last_hidden_state = last_hidden_state[:, :-1]
-                    if self.layer == "hidden":
-                        hidden_states = hidden_states[self.layer_idx][:, :-1]
-                elif i == max_embeddings_multiples - 1:
-                    # discard the starting token
-                    last_hidden_state = last_hidden_state[:, 1:]
-                    if self.layer == "hidden":
-                        hidden_states = hidden_states[self.layer_idx][:, 1:]
-                else:
-                    # discard both starting and ending tokens
-                    last_hidden_state = last_hidden_state[:, 1:-1]
-                    if self.layer == "hidden":
-                        hidden_states = hidden_states[self.layer_idx][:, 1:-1]
-                last_hidden_state_all.append(last_hidden_state)
-                if self.layer == "hidden":
-                    hidden_states_all.append(hidden_states)
-            last_hidden_state = ops.concat(last_hidden_state_all, axis=1)
-            if self.layer == "hidden":
-                hidden_states = ops.concat(hidden_states_all, axis=1)
-            pooler_output = last_hidden_state[
-                ops.arange(last_hidden_state.shape[0]),
-                tokens.argmax(axis=-1),
-            ]
+            return self.get_unweighted_text_embeddings(tokens, self.max_length, max_embeddings_multiples)
         else:
             (last_hidden_state, pooler_output, hidden_states, attentions) = self.embedding(
                 input_ids=tokens, output_hidden_states=(self.layer == "hidden")
             )
-        return last_hidden_state, pooler_output, hidden_states, max_embeddings_multiples
-
-    @ms.jit
-    def construct(self, tokens):
-        (
-            last_hidden_state,
-            pooler_output,
-            hidden_states,
-            max_embeddings_multiples,
-        ) = self.get_unweighted_text_embeddings_SDXL1(tokens)
-        if self.layer == "last":
-            z = last_hidden_state
-        elif self.layer == "pooled":
-            z = pooler_output[:, None, :]
-        else:
-            z = hidden_states if max_embeddings_multiples > 1 else hidden_states[self.layer_idx]
-        if self.return_pooled:
-            return z, pooler_output
-        return z
+            if self.layer == "last":
+                z = last_hidden_state
+            elif self.layer == "pooled":
+                z = pooler_output[:, None, :]
+            else:
+                z = hidden_states[self.layer_idx]
+            if self.return_pooled:
+                return z, pooler_output
+            return z
 
     def embedding(self, input_ids, output_hidden_states):
         return self.transformer(input_ids=input_ids, output_hidden_states=output_hidden_states)
@@ -567,66 +637,17 @@ class FrozenOpenCLIPEmbedder2(AbstractEmbModel):
             raise NotImplementedError()
         self.legacy = legacy
 
-    def tokenize(self, text, lpw=False, max_embeddings_multiples=4):
-        if lpw:
-            tokens, lengths = lpw_openclip_tokenize(text, max_embeddings_multiples=max_embeddings_multiples)
-        else:
-            tokens, lengths = openclip_tokenize(text)
+    def tokenize(self, text):
+        tokens, lengths = openclip_tokenize(text)
         tokens = np.array(tokens, dtype=np.int32)
         lengths = np.array(lengths, dtype=np.int32)
         return tokens, lengths
-
-    def get_unweighted_text_embeddings_SDXL2(self, tokens, max_embeddings_multiples):
-        tokens_embeds_all = []
-        last_embeds_all = []
-        for i in range(max_embeddings_multiples):
-            # extract the i-th chunk
-            text_input_chunk = tokens[:, i * (self.max_length - 2) : (i + 1) * (self.max_length - 2) + 2].copy()
-            # cover the head and the tail by the starting and the ending tokens
-            text_input_chunk[:, 0] = tokens[0, 0]
-            text_input_chunk[:, -1] = tokens[0, -1]
-            z = self.encode_with_transformer(text_input_chunk)
-            if not self.return_pooled and self.legacy:
-                tokens_embeds = z
-            elif not self.return_pooled and not self.legacy:
-                tokens_embeds = z[self.layer_idx]
-            else:
-                assert not self.legacy
-                tokens_embeds = z[self.layer_idx]
-                last_embeds = z[0]
-                last_embeds = self.model.ln_final(last_embeds)
-            # no_boseos_middle
-            if i == 0:
-                # discard the ending token
-                tokens_embeds = tokens_embeds[:, :-1]
-                if self.return_pooled and not self.legacy:
-                    last_embeds = last_embeds[:, :-1]
-            elif i == max_embeddings_multiples - 1:
-                # discard the starting token
-                tokens_embeds = tokens_embeds[:, 1:]
-                if self.return_pooled and not self.legacy:
-                    last_embeds = last_embeds[:, 1:]
-            else:
-                # discard both starting and ending tokens
-                tokens_embeds = tokens_embeds[:, 1:-1]
-                if self.return_pooled and not self.legacy:
-                    last_embeds = last_embeds[:, 1:-1]
-            tokens_embeds_all.append(tokens_embeds)
-            if self.return_pooled and not self.legacy:
-                last_embeds_all.append(last_embeds)
-        tokens_embeds = ops.concat(tokens_embeds_all, axis=1)
-        if self.return_pooled and not self.legacy:
-            last_embeds = ops.concat(last_embeds_all, axis=1)
-            pooled = self.pool(last_embeds, tokens)
-            return tokens_embeds, pooled
-        return tokens_embeds
 
     @ms.jit
     def construct(self, tokens):
         max_embeddings_multiples = (tokens.shape[1] - 2) // (self.max_length - 2)
         if max_embeddings_multiples > 1:
-            z = self.get_unweighted_text_embeddings_SDXL2(tokens, max_embeddings_multiples)
-            return z
+            return self.get_unweighted_text_embeddings(tokens, self.max_length, max_embeddings_multiples)
         else:
             z = self.encode_with_transformer(tokens)
             if not self.return_pooled and self.legacy:

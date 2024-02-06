@@ -22,7 +22,7 @@ def create_loader(
     token_nums=None,
     return_sample_name=False,
     lpw=False,
-    max_embeddings_multiples=4,
+    max_embeddings_multiples=3,
     cache_latent=False,
     cache_text_embedding=False,
     cache_path=None,

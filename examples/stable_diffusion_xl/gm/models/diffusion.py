@@ -212,7 +212,7 @@ class DiffusionEngine(nn.Cell):
         init_latent_path=None,  # '/path/to/sdxl_init_latent.npy'
         control: Optional[Tensor] = None,
         lpw=False,
-        max_embeddings_multiples=4,
+        max_embeddings_multiples=3,
     ):
         print("Sampling")
 
@@ -301,7 +301,7 @@ class DiffusionEngine(nn.Cell):
         add_noise=True,
         amp_level="O0",
         lpw=False,
-        max_embeddings_multiples=4,
+        max_embeddings_multiples=3,
     ):
         dtype = ms.float32 if amp_level not in ("O2", "O3") else ms.float16
 
