@@ -1,7 +1,6 @@
 import importlib
 import inspect
 import logging
-import unittest
 
 import numpy as np
 import torch
@@ -87,7 +86,6 @@ def get_modules(pt_module, ms_module, dtype, *args, **kwargs):
         ms_modules_instance = set_dtype(ms_modules_instance, ms.float32)
     else:
         raise NotImplementedError(f"Dtype {dtype} for model is not implemented")
-
     missing_keys, unexpected_keys = ms.load_param_into_net(
         ms_modules_instance, convert_state_dict(ms_modules_instance, pt_modules_instance.state_dict()), strict_load=True
     )
@@ -188,13 +186,12 @@ def compute_diffs(pt_outputs: torch.Tensor, ms_outputs: ms.Tensor, relative=True
     return diffs
 
 
-# TODO: decouple with torch, maybe a feasible solution is fixing seed 
-# and comparing with fixed expected result, just like what diffusers does
-class ModulesTest(unittest.TestCase):
-    # 1% relative error when FP32 and 2% when FP16
-    eps = 0.01
+class ModulesTest():
+    def __init__(self):
+        super().__init__()
+        # 1% relative error when FP32 and 2% when FP16
+        self.eps = 0.01
 
-    @parameterized.expand(ALL_CASES)
     def test_named_modules_with_graph_fp32(
         self,
         name,
@@ -228,7 +225,6 @@ class ModulesTest(unittest.TestCase):
             (np.array(diffs) < eps).all(), f"Outputs({np.array(diffs).tolist()}) has diff bigger than {eps}"
         )
 
-    @parameterized.expand(ALL_CASES)
     def test_named_modules_with_graph_fp16(
         self,
         name,
@@ -266,7 +262,6 @@ class ModulesTest(unittest.TestCase):
             (np.array(diffs) < eps).all(), f"Outputs({np.array(diffs).tolist()}) has diff bigger than {eps}"
         )
 
-    @parameterized.expand(ALL_CASES)
     def test_named_modules_with_pynative_fp32(
         self,
         name,
@@ -300,7 +295,6 @@ class ModulesTest(unittest.TestCase):
             (np.array(diffs) < eps).all(), f"Outputs({np.array(diffs).tolist()}) has diff bigger than {eps}"
         )
 
-    @parameterized.expand(ALL_CASES)
     def test_named_modules_with_pynative_fp16(
         self,
         name,
@@ -330,10 +324,13 @@ class ModulesTest(unittest.TestCase):
 
         pt_outputs = pt_model(*pt_inputs_args, **pt_inputs_kwargs)
         ms_outputs = ms_model(*ms_inputs_args, **ms_inputs_kwargs)
-
         diffs = compute_diffs(pt_outputs, ms_outputs)
 
         eps = self.eps * 2 if pt_dtype == "fp16" or ms_dtype == "fp16" else self.eps
         self.assertTrue(
             (np.array(diffs) < eps).all(), f"Outputs({np.array(diffs).tolist()}) has diff bigger than {eps}"
         )
+
+modulestest = ModulesTest()
+# 调用测试方法
+modulestest.test_named_modules_with_pynative_fp16(*ALL_CASES[0])

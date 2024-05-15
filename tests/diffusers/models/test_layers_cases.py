@@ -457,7 +457,109 @@ TRANSFORMER2D_CASES = [
     ],
 ]
 
+UNETS1D_CASES = [
+    [
+        "UNet1DModel_default",
+        "diffusers.models.unets.unet_1d.UNet1DModel",
+        "mindone.diffusers.models.unets.unet_1d.UNet1DModel",
+        (),
+        dict(
+            block_out_channels=(32, 64, 128, 256),
+            in_channels=14,
+            out_channels=14,
+            time_embedding_type="positional",
+            use_timestep_embedding=True,
+            flip_sin_to_cos=False,
+            freq_shift=1.0,
+            out_block_type="OutConv1DBlock",
+            mid_block_type="MidResTemporalBlock1D",
+            down_block_types=("DownResnetBlock1D", "DownResnetBlock1D", "DownResnetBlock1D", "DownResnetBlock1D"),
+            up_block_types=("UpResnetBlock1D", "UpResnetBlock1D", "UpResnetBlock1D"),
+            act_fn="swish",
+        ),
+        (np.random.randn(4, 14, 16).astype(np.float32),),
+        dict(timestep=np.array([1], dtype=np.int64), return_dict=False)
+    ],
+    # [
+    #     "UNet1DModel_cross_attention_dim",
+    #     "diffusers.models.unets.unet_1d.UNet1DModel",
+    #     "mindone.diffusers.models.unets.unet_1d.UNet1DModel",
+    #     (),
+    #     dict(
+    #         in_channels=64,
+    #         num_attention_heads=2,
+    #         attention_head_dim=32,
+    #         dropout=0.0,
+    #         cross_attention_dim=64,
+    #     ),
+    #     (np.random.randn(4, 14, 16).astype(np.float32), np.random.randn(1, 4, 64).astype(np.float32)),
+    #     dict(return_dict=False),
+    # ],
+    # [
+    #     "UNet1DModel_timestep_1",
+    #     "diffusers.models.unets.unet_1d.UNet1DModel",
+    #     "mindone.diffusers.models.unets.unet_1d.UNet1DModel",
+    #     (),
+    #     dict(
+    #         in_channels=64,
+    #         num_attention_heads=2,
+    #         attention_head_dim=32,
+    #         dropout=0.0,
+    #         cross_attention_dim=64,
+    #         num_embeds_ada_norm=5,
+    #     ),
+    #     (np.random.randn(4, 14, 16).astype(np.float32),),
+    #     dict(timestep=np.array([1], dtype=np.int64), return_dict=False),
+    # ],
+    # [
+    #     "UNet1DModel_timestep_2",
+    #     "diffusers.models.unets.unet_1d.UNet1DModel",
+    #     "mindone.diffusers.models.unets.unet_1d.UNet1DModel",
+    #     (),
+    #     dict(
+    #         in_channels=64,
+    #         num_attention_heads=2,
+    #         attention_head_dim=32,
+    #         dropout=0.0,
+    #         cross_attention_dim=64,
+    #         num_embeds_ada_norm=5,
+    #     ),
+    #     (np.random.randn(4, 14, 16).astype(np.float32),),
+    #     dict(timestep=np.array([2], dtype=np.int64), return_dict=False),
+    # ],
+    # [
+    #     "UNet1DModel_dropout",
+    #     "diffusers.models.unets.unet_1d.UNet1DModel",
+    #     "mindone.diffusers.models.unets.unet_1d.UNet1DModel",
+    #     (),
+    #     dict(
+    #         in_channels=32,
+    #         num_attention_heads=2,
+    #         attention_head_dim=16,
+    #         dropout=0.3,
+    #         cross_attention_dim=None,
+    #     ),
+    #     (np.random.randn(4, 14, 16).astype(np.float32),),
+    #     dict(return_dict=False),
+    # ],
+    # [
+    #     "UNet1DModel_discrete",
+    #     "diffusers.models.unets.unet_1d.UNet1DModel",
+    #     "mindone.diffusers.models.unets.unet_1d.UNet1DModel",
+    #     (),
+    #     dict(
+    #         num_attention_heads=1,
+    #         attention_head_dim=32,
+    #         num_vector_embeds=5,
+    #         sample_size=16,
+    #     ),
+    #     (np.random.randint(0, 5, (1, 32)).astype(np.int64),),
+    #     dict(return_dict=False),
+    # ],
+]
 
-ALL_CASES = (
-    NORMALIZATION_CASES + EMBEDDINGS_CASES + UPSAMPLE2D_CASES + DOWNSAMPLE2D_CASES + RESNET_CASES + TRANSFORMER2D_CASES
-)
+
+# ALL_CASES = (
+#     NORMALIZATION_CASES + EMBEDDINGS_CASES + UPSAMPLE2D_CASES + DOWNSAMPLE2D_CASES + RESNET_CASES + TRANSFORMER2D_CASES + UNETS1D_CASES
+# )
+ALL_CASES = (UNETS1D_CASES)

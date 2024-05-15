@@ -19,7 +19,7 @@ from typing import List, Optional, Tuple, Union
 import numpy as np
 
 import mindspore as ms
-from mindspore import ops
+from mindspore import ops, nn
 
 from . import logging
 
@@ -101,5 +101,56 @@ def ms_conv_transpose2d(input, weight, bias=None, stride=1, padding=0, output_pa
         assert isinstance(bias, ms.Tensor) and bias.ndim == 1
         bias = bias.reshape(1, -1, 1, 1)
         outputs += bias
+
+    return outputs
+
+
+def ms_conv_transpose1d(input, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1):
+    # Equivalence of torch.nn.functional.conv_transpose1d
+    assert output_padding == 0, "Only support output_padding == 0 so far."
+    
+    if isinstance(stride, tuple):
+        stride = stride[0]
+    if isinstance(dilation, tuple):
+        dilation = dilation[0]
+    if isinstance(padding, tuple):
+        padding = padding[0]
+
+    # InferShape manually
+    # Format adapted from https://pytorch.org/docs/stable/generated/torch.nn.functional.conv_transpose1d.html
+    batch_size, in_channels, iW = input.shape
+    _, out_channels_divide_groups, kW = weight.shape
+
+    out_channels = out_channels_divide_groups * groups
+    outW = (iW - 1) * stride - 2 * padding + dilation * (kW - 1) + 1
+
+    if bias is None:
+        op_conv_transpose1d = nn.Conv1dTranspose(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kW,
+            stride=stride,
+            pad_mode="pad",
+            padding=padding,
+            dilation=dilation,
+            weight_init=weight,
+            group=groups,
+        )
+    else:
+        op_conv_transpose1d = nn.Conv1dTranspose(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kW,
+            stride=stride,
+            pad_mode="pad",
+            padding=padding,
+            dilation=dilation,
+            group=groups,
+            has_bias=True,
+            weight_init=weight,
+            bias_init=bias,
+        )
+
+    outputs = op_conv_transpose1d(input)
 
     return outputs
