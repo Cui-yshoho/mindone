@@ -457,9 +457,9 @@ TRANSFORMER2D_CASES = [
     ],
 ]
 
-UNETS1D_CASES = [
+UNET1D_CASES = [
     [
-        "UNet1DModel_default",
+        "UNet1DModel",
         "diffusers.models.unets.unet_1d.UNet1DModel",
         "mindone.diffusers.models.unets.unet_1d.UNet1DModel",
         (),
@@ -478,88 +478,129 @@ UNETS1D_CASES = [
             act_fn="swish",
         ),
         (np.random.randn(4, 14, 16).astype(np.float32),),
-        dict(timestep=np.array([1], dtype=np.int64), return_dict=False)
+        dict(timestep=np.array([10] * 4, dtype=np.int64), return_dict=False),
     ],
-    # [
-    #     "UNet1DModel_cross_attention_dim",
-    #     "diffusers.models.unets.unet_1d.UNet1DModel",
-    #     "mindone.diffusers.models.unets.unet_1d.UNet1DModel",
-    #     (),
-    #     dict(
-    #         in_channels=64,
-    #         num_attention_heads=2,
-    #         attention_head_dim=32,
-    #         dropout=0.0,
-    #         cross_attention_dim=64,
-    #     ),
-    #     (np.random.randn(4, 14, 16).astype(np.float32), np.random.randn(1, 4, 64).astype(np.float32)),
-    #     dict(return_dict=False),
-    # ],
-    # [
-    #     "UNet1DModel_timestep_1",
-    #     "diffusers.models.unets.unet_1d.UNet1DModel",
-    #     "mindone.diffusers.models.unets.unet_1d.UNet1DModel",
-    #     (),
-    #     dict(
-    #         in_channels=64,
-    #         num_attention_heads=2,
-    #         attention_head_dim=32,
-    #         dropout=0.0,
-    #         cross_attention_dim=64,
-    #         num_embeds_ada_norm=5,
-    #     ),
-    #     (np.random.randn(4, 14, 16).astype(np.float32),),
-    #     dict(timestep=np.array([1], dtype=np.int64), return_dict=False),
-    # ],
-    # [
-    #     "UNet1DModel_timestep_2",
-    #     "diffusers.models.unets.unet_1d.UNet1DModel",
-    #     "mindone.diffusers.models.unets.unet_1d.UNet1DModel",
-    #     (),
-    #     dict(
-    #         in_channels=64,
-    #         num_attention_heads=2,
-    #         attention_head_dim=32,
-    #         dropout=0.0,
-    #         cross_attention_dim=64,
-    #         num_embeds_ada_norm=5,
-    #     ),
-    #     (np.random.randn(4, 14, 16).astype(np.float32),),
-    #     dict(timestep=np.array([2], dtype=np.int64), return_dict=False),
-    # ],
-    # [
-    #     "UNet1DModel_dropout",
-    #     "diffusers.models.unets.unet_1d.UNet1DModel",
-    #     "mindone.diffusers.models.unets.unet_1d.UNet1DModel",
-    #     (),
-    #     dict(
-    #         in_channels=32,
-    #         num_attention_heads=2,
-    #         attention_head_dim=16,
-    #         dropout=0.3,
-    #         cross_attention_dim=None,
-    #     ),
-    #     (np.random.randn(4, 14, 16).astype(np.float32),),
-    #     dict(return_dict=False),
-    # ],
-    # [
-    #     "UNet1DModel_discrete",
-    #     "diffusers.models.unets.unet_1d.UNet1DModel",
-    #     "mindone.diffusers.models.unets.unet_1d.UNet1DModel",
-    #     (),
-    #     dict(
-    #         num_attention_heads=1,
-    #         attention_head_dim=32,
-    #         num_vector_embeds=5,
-    #         sample_size=16,
-    #     ),
-    #     (np.random.randint(0, 5, (1, 32)).astype(np.int64),),
-    #     dict(return_dict=False),
-    # ],
+    [
+        "UNetRLModel",
+        "diffusers.models.unets.unet_1d.UNet1DModel",
+        "mindone.diffusers.models.unets.unet_1d.UNet1DModel",
+        (),
+        dict(
+            in_channels=14,
+            out_channels=14,
+            down_block_types=("DownResnetBlock1D", "DownResnetBlock1D", "DownResnetBlock1D", "DownResnetBlock1D"),
+            up_block_types=(),
+            out_block_type="ValueFunction",
+            mid_block_type="ValueFunctionMidBlock1D",
+            block_out_channels=(32, 64, 128, 256),
+            layers_per_block=1,
+            downsample_each_block=True,
+            use_timestep_embedding=True,
+            freq_shift=1.0,
+            flip_sin_to_cos=False,
+            time_embedding_type="positional",
+            act_fn="mish",
+        ),
+        (np.random.randn(4, 14, 16).astype(np.float32),),
+        dict(timestep=np.array([10] * 4, dtype=np.int64), return_dict=False),
+    ],
 ]
 
-
-# ALL_CASES = (
-#     NORMALIZATION_CASES + EMBEDDINGS_CASES + UPSAMPLE2D_CASES + DOWNSAMPLE2D_CASES + RESNET_CASES + TRANSFORMER2D_CASES + UNETS1D_CASES
-# )
-ALL_CASES = (UNETS1D_CASES)
+UNETSTABLECASCADE_CASES = [
+    [
+        "UNetStableCascadeModel_prior",
+        "diffusers.models.unets.unet_stable_cascade.StableCascadeUNet",
+        "mindone.diffusers.models.unets.unet_stable_cascade.StableCascadeUNet",
+        (),
+        dict(
+            block_out_channels=(2048, 2048),
+            block_types_per_layer=(
+                ("SDCascadeResBlock", "SDCascadeTimestepBlock", "SDCascadeAttnBlock"),
+                ("SDCascadeResBlock", "SDCascadeTimestepBlock", "SDCascadeAttnBlock"),
+            ),
+            clip_image_in_channels=768,
+            clip_seq=4,
+            clip_text_in_channels=1280,
+            clip_text_pooled_in_channels=1280,
+            conditioning_dim=2048,
+            down_blocks_repeat_mappers=(1, 1),
+            down_num_layers_per_block=(8, 24),
+            dropout=(0.1, 0.1),
+            effnet_in_channels=None,
+            in_channels=16,
+            kernel_size=3,
+            num_attention_heads=(32, 32),
+            out_channels=16,
+            patch_size=1,
+            pixel_mapper_in_channels=None,
+            self_attn=True,
+            switch_level=(False,),
+            timestep_conditioning_type=("sca", "crp"),
+            timestep_ratio_embedding_dim=64,
+            up_blocks_repeat_mappers=(1, 1),
+            up_num_layers_per_block=(24, 8),
+        ),
+        (np.random.randn(1, 16, 24, 24).astype(np.float32),),
+        dict(
+            timestep_ratio=np.array([1], dtype=np.float32),
+            clip_text_pooled=np.random.randn(1, 1, 1280).astype(np.float32),
+            clip_text=np.random.randn(1, 77, 1280).astype(np.float32),
+            clip_img=np.random.randn(1, 1, 768).astype(np.float32),
+            pixels=np.random.randn(1, 3, 8, 8).astype(np.float32),
+        ),
+    ],
+    [
+        "UNetStableCascadeModel_decoder",
+        "diffusers.models.unets.unet_stable_cascade.StableCascadeUNet",
+        "mindone.diffusers.models.unets.unet_stable_cascade.StableCascadeUNet",
+        (),
+        dict(
+            block_out_channels=(320, 640, 1280, 1280),
+            block_types_per_layer=(
+                ("SDCascadeResBlock", "SDCascadeTimestepBlock"),
+                ("SDCascadeResBlock", "SDCascadeTimestepBlock"),
+                ("SDCascadeResBlock", "SDCascadeTimestepBlock", "SDCascadeAttnBlock"),
+                ("SDCascadeResBlock", "SDCascadeTimestepBlock", "SDCascadeAttnBlock"),
+            ),
+            clip_image_in_channels=None,
+            clip_seq=4,
+            clip_text_in_channels=None,
+            clip_text_pooled_in_channels=1280,
+            conditioning_dim=1280,
+            down_blocks_repeat_mappers=(1, 1, 1, 1),
+            down_num_layers_per_block=(2, 6, 28, 6),
+            dropout=(0, 0, 0.1, 0.1),
+            effnet_in_channels=16,
+            in_channels=4,
+            kernel_size=3,
+            num_attention_heads=(0, 0, 20, 20),
+            out_channels=4,
+            patch_size=2,
+            pixel_mapper_in_channels=3,
+            self_attn=True,
+            switch_level=None,
+            timestep_conditioning_type=("sca"),
+            timestep_ratio_embedding_dim=64,
+            up_blocks_repeat_mappers=(3, 3, 2, 2),
+            up_num_layers_per_block=(6, 28, 6, 2),
+        ),
+        (np.random.randn(1, 4, 256, 256).astype(np.float32),),
+        dict(
+            timestep_ratio=np.array([1], dtype=np.float32),
+            clip_text_pooled=np.random.randn(1, 1, 1280).astype(np.float32),
+            clip_text=np.random.randn(1, 77, 1280).astype(np.float32),
+            clip_img=np.random.randn(1, 1, 1280).astype(np.float32),
+            pixels=np.random.randn(1, 3, 8, 8).astype(np.float32),
+        ),
+    ],
+]
+ALL_CASES = (
+    NORMALIZATION_CASES
+    + EMBEDDINGS_CASES
+    + UPSAMPLE2D_CASES
+    + DOWNSAMPLE2D_CASES
+    + RESNET_CASES
+    + TRANSFORMER2D_CASES
+    + UNET1D_CASES
+    + UNETSTABLECASCADE_CASES
+)

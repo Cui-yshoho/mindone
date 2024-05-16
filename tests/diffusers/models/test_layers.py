@@ -6,11 +6,10 @@ import unittest
 import numpy as np
 import torch
 from parameterized import parameterized
+from test_layers_cases import ALL_CASES
 
 import mindspore as ms
 from mindspore import nn, ops
-
-from test_layers_cases import ALL_CASES
 
 logger = logging.getLogger("ModulesUnitTest")
 
@@ -103,7 +102,7 @@ def get_modules(pt_module, ms_module, dtype, *args, **kwargs):
 
     if dtype == "fp32":
         return pt_modules_instance, ms_modules_instance, pt_dtype, ms_dtype
-    
+
     # Some torch modules do not support fp16 in CPU, converted to fp32 instead.
     for _, submodule in pt_modules_instance.named_modules():
         if submodule.__class__.__name__ in TORCH_FP16_BLACKLIST:
@@ -188,7 +187,7 @@ def compute_diffs(pt_outputs: torch.Tensor, ms_outputs: ms.Tensor, relative=True
     return diffs
 
 
-# TODO: decouple with torch, maybe a feasible solution is fixing seed 
+# TODO: decouple with torch, maybe a feasible solution is fixing seed
 # and comparing with fixed expected result, just like what diffusers does
 class ModulesTest(unittest.TestCase):
     # 1% relative error when FP32 and 2% when FP16

@@ -507,7 +507,16 @@ class TemporalConvLayer(nn.Cell):
             GroupNorm(norm_num_groups, out_dim),
             nn.SiLU(),
             nn.Dropout(p=dropout),
-            nn.Conv3d(out_dim, in_dim, (3, 1, 1), padding=(1, 1, 0, 0, 0, 0), pad_mode="pad", has_bias=True, weight_init='zeros', bias_init='zeros'),
+            nn.Conv3d(
+                out_dim,
+                in_dim,
+                (3, 1, 1),
+                padding=(1, 1, 0, 0, 0, 0),
+                pad_mode="pad",
+                has_bias=True,
+                weight_init="zeros",
+                bias_init="zeros",
+            ),
         )
 
     def construct(self, hidden_states: ms.Tensor, num_frames: int = 1) -> ms.Tensor:

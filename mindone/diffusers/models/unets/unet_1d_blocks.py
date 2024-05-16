@@ -157,7 +157,7 @@ class ValueFunctionMidBlock1D(nn.Cell):
         self.res2 = ResidualTemporalBlock1D(in_channels // 2, in_channels // 4, embed_dim=embed_dim)
         self.down2 = Downsample1D(out_channels // 4, use_conv=True)
 
-    def constrcut(self, x: ms.Tensor, temb: Optional[ms.Tensor] = None) -> ms.Tensor:
+    def construct(self, x: ms.Tensor, temb: Optional[ms.Tensor] = None) -> ms.Tensor:
         x = self.res1(x, temb)
         x = self.down1(x)
         x = self.res2(x, temb)

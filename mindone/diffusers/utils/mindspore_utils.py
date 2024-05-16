@@ -19,7 +19,7 @@ from typing import List, Optional, Tuple, Union
 import numpy as np
 
 import mindspore as ms
-from mindspore import ops, nn
+from mindspore import nn, ops
 
 from . import logging
 
@@ -108,7 +108,7 @@ def ms_conv_transpose2d(input, weight, bias=None, stride=1, padding=0, output_pa
 def ms_conv_transpose1d(input, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1):
     # Equivalence of torch.nn.functional.conv_transpose1d
     assert output_padding == 0, "Only support output_padding == 0 so far."
-    
+
     if isinstance(stride, tuple):
         stride = stride[0]
     if isinstance(dilation, tuple):
