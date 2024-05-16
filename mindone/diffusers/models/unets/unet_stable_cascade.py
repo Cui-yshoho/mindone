@@ -45,11 +45,10 @@ class SDCascadeLayerNorm(LayerNorm):
 class SDCascadeTimestepBlock(nn.Cell):
     def __init__(self, c, c_timestep, conds=[]):
         super().__init__()
-        linear_cls = nn.Dense
-        self.mapper = linear_cls(c_timestep, c * 2)
+        self.mapper = nn.Dense(c_timestep, c * 2)
         self.conds = conds
         for cname in conds:
-            setattr(self, f"mapper_{cname}", linear_cls(c_timestep, c * 2))
+            setattr(self, f"mapper_{cname}", nn.Dense(c_timestep, c * 2))
 
     def construct(self, x, t):
         t = t.chunk(len(self.conds) + 1, axis=1)
@@ -88,11 +87,11 @@ class SDCascadeResBlock(nn.Cell):
 class GlobalResponseNorm(nn.Cell):
     def __init__(self, dim):
         super().__init__()
-        self.gamma = ms.Parameter(ops.zeros((1, 1, 1, dim)))
-        self.beta = ms.Parameter(ops.zeros((1, 1, 1, dim)))
+        self.gamma = ms.Parameter(ops.zeros((1, 1, 1, dim)), name="gamma")
+        self.beta = ms.Parameter(ops.zeros((1, 1, 1, dim)), name="beta")
 
     def construct(self, x):
-        agg_norm = ops.norm(x, ord=2, dim=(1, 2), keepdim=True, dtype=x.dtype)
+        agg_norm = ops.norm(x, ord=2, dim=(1, 2), keepdim=True).to(x.dtype)
         stand_div_norm = agg_norm / (agg_norm.mean(axis=-1, keep_dims=True) + 1e-6)
         return self.gamma * (x * stand_div_norm) + self.beta + x
 
@@ -109,10 +108,10 @@ class SDCascadeAttnBlock(nn.Cell):
 
     def construct(self, x, kv):
         kv = self.kv_mapper(kv)
-        norm_x = self.norm(x).to(dtype=self.dtype)
+        norm_x = self.norm(x)
         if self.self_attn:
             batch_size, channel, _, _ = x.shape
-            kv = ops.cat([norm_x.view(batch_size, channel, -1).transpose(1, 2), kv], axis=1)
+            kv = ops.cat([norm_x.view(batch_size, channel, -1).swapaxes(1, 2), kv], axis=1)
         x = x + self.attention(norm_x, encoder_hidden_states=kv)
         return x
 
@@ -276,6 +275,8 @@ class StableCascadeUNet(ModelMixin, ConfigMixin):
                 ),
                 SDCascadeLayerNorm(block_out_channels[0], elementwise_affine=False, eps=1e-6),
             )
+        else:
+            self.effnet_mapper = None
         if pixel_mapper_in_channels is not None:
             self.pixels_mapper = nn.SequentialCell(
                 nn.Conv2d(
@@ -287,6 +288,8 @@ class StableCascadeUNet(ModelMixin, ConfigMixin):
                 ),
                 SDCascadeLayerNorm(block_out_channels[0], elementwise_affine=False, eps=1e-6),
             )
+        else:
+            self.pixels_mapper = None
 
         self.clip_txt_pooled_mapper = nn.Dense(clip_text_pooled_in_channels, conditioning_dim * clip_seq)
         if clip_text_in_channels is not None:
@@ -413,7 +416,7 @@ class StableCascadeUNet(ModelMixin, ConfigMixin):
             if up_blocks_repeat_mappers is not None:
                 block_repeat_mappers = nn.CellList()
                 for _ in range(up_blocks_repeat_mappers[::-1][i] - 1):
-                    block_repeat_mappers.append(nn.Conv2d(block_out_channels[i], block_out_channels[i], kernel_size=1))
+                    block_repeat_mappers.append(nn.Conv2d(block_out_channels[i], block_out_channels[i], kernel_size=1, has_bias=True))
                 up_repeat_mappers.append(block_repeat_mappers)
 
         self.up_blocks = up_blocks
@@ -491,7 +494,7 @@ class StableCascadeUNet(ModelMixin, ConfigMixin):
 
     def get_timestep_ratio_embedding(self, timestep_ratio, max_positions=10000):
         r = timestep_ratio * max_positions
-        half_dim = self.config.timestep_ratio_embedding_dim // 2
+        half_dim = self.config["timestep_ratio_embedding_dim"] // 2
 
         emb = math.log(max_positions) / (half_dim - 1)
         emb = ops.arange(half_dim).float().mul(-emb).exp()
@@ -507,14 +510,14 @@ class StableCascadeUNet(ModelMixin, ConfigMixin):
         if len(clip_txt_pooled.shape) == 2:
             clip_txt_pool = clip_txt_pooled.unsqueeze(1)
         clip_txt_pool = self.clip_txt_pooled_mapper(clip_txt_pooled).view(
-            clip_txt_pooled.shape[0], clip_txt_pooled.shape[1] * self.config.clip_seq, -1
+            clip_txt_pooled.shape[0], clip_txt_pooled.shape[1] * self.config["clip_seq"], -1
         )
         if clip_txt is not None and clip_img is not None:
             clip_txt = self.clip_txt_mapper(clip_txt)
             if len(clip_img.shape) == 2:
                 clip_img = clip_img.unsqueeze(1)
             clip_img = self.clip_img_mapper(clip_img).view(
-                clip_img.shape[0], clip_img.shape[1] * self.config.clip_seq, -1
+                clip_img.shape[0], clip_img.shape[1] * self.config["clip_seq"], -1
             )
             clip = ops.cat([clip_txt, clip_txt_pool, clip_img], axis=1)
         else:
@@ -536,7 +539,7 @@ class StableCascadeUNet(ModelMixin, ConfigMixin):
 
     def _down_encode(self, x, r_embed, clip):
         level_outputs = []
-        block_group = zip(self.down_blocks, self.down_downscalers, self.down_repeat_mappers)
+        block_group = list(zip(self.down_blocks, self.down_downscalers, self.down_repeat_mappers))
 
         for down_block, downscaler, repmap in block_group:
             x = downscaler(x)
@@ -557,7 +560,7 @@ class StableCascadeUNet(ModelMixin, ConfigMixin):
 
     def _up_decode(self, level_outputs, r_embed, clip):
         x = level_outputs[0]
-        block_group = zip(self.up_blocks, self.up_upscalers, self.up_repeat_mappers)
+        block_group = list(zip(self.up_blocks, self.up_upscalers, self.up_repeat_mappers))
 
         for i, (up_block, upscaler, repmap) in enumerate(block_group):
             for j in range(len(repmap) + 1):
@@ -609,9 +612,9 @@ class StableCascadeUNet(ModelMixin, ConfigMixin):
 
         # Model Blocks
         x = self.embedding(sample)
-        if hasattr(self, "effnet_mapper") and effnet is not None:
+        if self.effnet_mapper is not None and effnet is not None:
             x = x + self.effnet_mapper(ops.interpolate(effnet, size=x.shape[-2:], mode="bilinear", align_corners=True))
-        if hasattr(self, "pixels_mapper"):
+        if self.pixels_mapper is not None:
             x = x + ops.interpolate(self.pixels_mapper(pixels), size=x.shape[-2:], mode="bilinear", align_corners=True)
         level_outputs = self._down_encode(x, timestep_ratio_embed, clip)
         x = self._up_decode(level_outputs, timestep_ratio_embed, clip)

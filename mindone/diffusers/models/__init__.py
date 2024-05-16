@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from .embeddings import ImageProjection
     from .modeling_utils import ModelMixin
     from .transformers import Transformer2DModel
-    from .unets import UNet2DConditionModel, UNet2DModel, UNet1DModel, StableCascadeUNet
+    from .unets import StableCascadeUNet, UNet1DModel, UNet2DConditionModel, UNet2DModel
     from .vq_model import VQModel
 
 else:

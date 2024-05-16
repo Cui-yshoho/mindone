@@ -547,6 +547,7 @@ UNETSTABLECASCADE_CASES = [
             clip_text=np.random.randn(1, 77, 1280).astype(np.float32),
             clip_img=np.random.randn(1, 1, 768).astype(np.float32),
             pixels=np.random.randn(1, 3, 8, 8).astype(np.float32),
+            return_dict=False,
         ),
     ],
     [
@@ -579,7 +580,7 @@ UNETSTABLECASCADE_CASES = [
             pixel_mapper_in_channels=3,
             self_attn=True,
             switch_level=None,
-            timestep_conditioning_type=("sca"),
+            timestep_conditioning_type=("sca",),
             timestep_ratio_embedding_dim=64,
             up_blocks_repeat_mappers=(3, 3, 2, 2),
             up_num_layers_per_block=(6, 28, 6, 2),
@@ -589,8 +590,8 @@ UNETSTABLECASCADE_CASES = [
             timestep_ratio=np.array([1], dtype=np.float32),
             clip_text_pooled=np.random.randn(1, 1, 1280).astype(np.float32),
             clip_text=np.random.randn(1, 77, 1280).astype(np.float32),
-            clip_img=np.random.randn(1, 1, 1280).astype(np.float32),
             pixels=np.random.randn(1, 3, 8, 8).astype(np.float32),
+            return_dict=False,
         ),
     ],
 ]
