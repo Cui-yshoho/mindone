@@ -23,8 +23,10 @@ _import_structure = {
     "embeddings": ["ImageProjection"],
     "modeling_utils": ["ModelMixin"],
     "transformers.transformer_2d": ["Transformer2DModel"],
+    "unets.unet_1d": ["UNet1DModel"],
     "unets.unet_2d": ["UNet2DModel"],
     "unets.unet_2d_condition": ["UNet2DConditionModel"],
+    "unets.unet_stable_cascade": ["StableCascadeUNet"],
     "vq_model": ["VQModel"],
 }
 
@@ -35,7 +37,7 @@ if TYPE_CHECKING:
     from .embeddings import ImageProjection
     from .modeling_utils import ModelMixin
     from .transformers import Transformer2DModel
-    from .unets import UNet2DConditionModel, UNet2DModel
+    from .unets import UNet2DConditionModel, UNet2DModel, UNet1DModel, StableCascadeUNet
     from .vq_model import VQModel
 
 else:
