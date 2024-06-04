@@ -8,4 +8,6 @@ from .models import (
     T5EncoderModel,
     T5ForConditionalGeneration,
     T5Model,
+    XLMRobertaModel,
+    XLMRobertaPreTrainedModel,
 )

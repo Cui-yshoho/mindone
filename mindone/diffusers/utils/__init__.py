@@ -26,6 +26,7 @@ from .constants import (
     WEIGHTS_NAME,
 )
 from .deprecation_utils import deprecate
+from .doc_utils import replace_example_docstring
 from .dynamic_modules_utils import get_class_from_dynamic_module
 from .hub_utils import PushToHubMixin, _add_variant, _get_model_file, extract_commit_hash, http_user_agent
 from .import_utils import _LazyModule, maybe_import_module_in_mindone
