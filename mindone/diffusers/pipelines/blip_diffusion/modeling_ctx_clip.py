@@ -14,26 +14,47 @@
 # limitations under the License.
 from typing import Optional, Tuple, Union
 
-import torch
-from torch import nn
-from transformers import CLIPPreTrainedModel
-from transformers.modeling_outputs import BaseModelOutputWithPooling
+import numpy as np
 from transformers.models.clip.configuration_clip import CLIPTextConfig
-from transformers.models.clip.modeling_clip import CLIPEncoder
+
+import mindspore as ms
+from mindspore import nn, ops
+
+from mindone.transformers import CLIPPreTrainedModel
+from mindone.transformers.modeling_outputs import BaseModelOutputWithPooling
+from mindone.transformers.models.clip.modeling_clip import CLIPEncoder
+
+_MIN_FP16 = ms.tensor(np.finfo(np.float16).min, dtype=ms.float16)
+_MIN_FP32 = ms.tensor(np.finfo(np.float32).min, dtype=ms.float32)
+_MIN_FP64 = ms.tensor(np.finfo(np.float64).min, dtype=ms.float64)
+_MIN_BF16 = ms.tensor(float.fromhex("-0x1.fe00000000000p+127"), dtype=ms.bfloat16)
 
 
-def _expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] = None):
+def dtype_to_min(dtype):
+    if dtype == ms.float16:
+        return _MIN_FP16
+    if dtype == ms.float32:
+        return _MIN_FP32
+    if dtype == ms.float64:
+        return _MIN_FP64
+    if dtype == ms.bfloat16:
+        return _MIN_BF16
+    else:
+        raise ValueError(f"Only support get minimum value of (float16, ), but got {dtype}")
+
+
+def _expand_mask(mask: ms.Tensor, dtype: ms.dtype, tgt_len: Optional[int] = None):
     """
     Expands attention_mask from `[bsz, seq_len]` to `[bsz, 1, tgt_seq_len, src_seq_len]`.
     """
-    bsz, src_len = mask.size()
+    bsz, src_len = mask.shape
     tgt_len = tgt_len if tgt_len is not None else src_len
 
-    expanded_mask = mask[:, None, None, :].expand(bsz, 1, tgt_len, src_len).to(dtype)
+    expanded_mask = mask[:, None, None, :].broadcast_to((bsz, 1, tgt_len, src_len)).to(dtype)
 
     inverted_mask = 1.0 - expanded_mask
 
-    return inverted_mask.masked_fill(inverted_mask.to(torch.bool), torch.finfo(dtype).min)
+    return inverted_mask.masked_fill(inverted_mask.bool(), dtype_to_min(dtype))
 
 
 # This is a modified version of the CLIPTextModel from transformers.models.clip.modeling_clip
@@ -50,16 +71,16 @@ class ContextCLIPTextModel(CLIPPreTrainedModel):
         # Initialize weights and apply final processing
         self.post_init()
 
-    def forward(
+    def construct(
         self,
-        ctx_embeddings: torch.Tensor = None,
+        ctx_embeddings: ms.Tensor = None,
         ctx_begin_pos: list = None,
-        input_ids: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.Tensor] = None,
+        input_ids: Optional[ms.Tensor] = None,
+        attention_mask: Optional[ms.Tensor] = None,
+        position_ids: Optional[ms.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
+        return_dict: Optional[bool] = False,
     ) -> Union[Tuple, BaseModelOutputWithPooling]:
         return self.text_model(
             ctx_embeddings=ctx_embeddings,
@@ -73,25 +94,25 @@ class ContextCLIPTextModel(CLIPPreTrainedModel):
         )
 
 
-class ContextCLIPTextTransformer(nn.Module):
+class ContextCLIPTextTransformer(nn.Cell):
     def __init__(self, config: CLIPTextConfig):
         super().__init__()
         self.config = config
         embed_dim = config.hidden_size
         self.embeddings = ContextCLIPTextEmbeddings(config)
         self.encoder = CLIPEncoder(config)
-        self.final_layer_norm = nn.LayerNorm(embed_dim)
+        self.final_layer_norm = nn.LayerNorm((embed_dim,))
 
-    def forward(
+    def construct(
         self,
-        ctx_embeddings: torch.Tensor,
+        ctx_embeddings: ms.Tensor,
         ctx_begin_pos: list,
-        input_ids: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.Tensor] = None,
+        input_ids: Optional[ms.Tensor] = None,
+        attention_mask: Optional[ms.Tensor] = None,
+        position_ids: Optional[ms.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
+        return_dict: Optional[bool] = False,
     ) -> Union[Tuple, BaseModelOutputWithPooling]:
         r"""
         Returns:
@@ -106,7 +127,7 @@ class ContextCLIPTextTransformer(nn.Module):
         if input_ids is None:
             raise ValueError("You have to specify either input_ids")
 
-        input_shape = input_ids.size()
+        input_shape = input_ids.shape
         input_ids = input_ids.view(-1, input_shape[-1])
 
         hidden_states = self.embeddings(
@@ -118,12 +139,10 @@ class ContextCLIPTextTransformer(nn.Module):
 
         bsz, seq_len = input_shape
         if ctx_embeddings is not None:
-            seq_len += ctx_embeddings.size(1)
+            seq_len += ctx_embeddings.shape[1]
         # CLIP's text model uses causal mask, prepare it here.
         # https://github.com/openai/CLIP/blob/cfcffb90e69f37bf2ff1e988237a0fbe41f33c04/clip/model.py#L324
-        causal_attention_mask = self._build_causal_attention_mask(bsz, seq_len, hidden_states.dtype).to(
-            hidden_states.device
-        )
+        causal_attention_mask = self._build_causal_attention_mask(bsz, seq_len, hidden_states.dtype)
         # expand attention_mask
         if attention_mask is not None:
             # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
@@ -143,10 +162,9 @@ class ContextCLIPTextTransformer(nn.Module):
 
         # text_embeds.shape = [batch_size, sequence_length, transformer.width]
         # take features from the eot embedding (eot_token is the highest number in each sequence)
-        # casting to torch.int for onnx compatibility: argmax doesn't support int64 inputs with opset 14
         pooled_output = last_hidden_state[
-            torch.arange(last_hidden_state.shape[0], device=input_ids.device),
-            input_ids.to(torch.int).argmax(dim=-1),
+            ops.arange(last_hidden_state.shape[0]),
+            input_ids.argmax(axis=-1),
         ]
 
         if not return_dict:
@@ -162,14 +180,14 @@ class ContextCLIPTextTransformer(nn.Module):
     def _build_causal_attention_mask(self, bsz, seq_len, dtype):
         # lazily create causal attention mask, with full attention between the vision tokens
         # pytorch uses additive attention mask; fill with -inf
-        mask = torch.empty(bsz, seq_len, seq_len, dtype=dtype)
-        mask.fill_(torch.tensor(torch.finfo(dtype).min))
-        mask.triu_(1)  # zero out the lower diagonal
+        mask = ops.zeros((bsz, seq_len, seq_len), dtype=dtype)
+        mask = mask.fill(dtype_to_min(dtype))
+        mask = mask.triu(1)  # zero out the lower diagonal
         mask = mask.unsqueeze(1)  # expand mask
         return mask
 
 
-class ContextCLIPTextEmbeddings(nn.Module):
+class ContextCLIPTextEmbeddings(nn.Cell):
     def __init__(self, config: CLIPTextConfig):
         super().__init__()
         embed_dim = config.hidden_size
@@ -178,16 +196,16 @@ class ContextCLIPTextEmbeddings(nn.Module):
         self.position_embedding = nn.Embedding(config.max_position_embeddings, embed_dim)
 
         # position_ids (1, len position emb) is contiguous in memory and exported when serialized
-        self.register_buffer("position_ids", torch.arange(config.max_position_embeddings).expand((1, -1)))
+        self.position_ids = ops.arange(config.max_position_embeddings).broadcast_to((1, -1))
 
-    def forward(
+    def construct(
         self,
-        ctx_embeddings: torch.Tensor,
+        ctx_embeddings: ms.Tensor,
         ctx_begin_pos: list,
-        input_ids: Optional[torch.LongTensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-    ) -> torch.Tensor:
+        input_ids: Optional[ms.Tensor] = None,
+        position_ids: Optional[ms.Tensor] = None,
+        inputs_embeds: Optional[ms.Tensor] = None,
+    ) -> ms.Tensor:
         if ctx_embeddings is None:
             ctx_len = 0
         else:
@@ -213,9 +231,9 @@ class ContextCLIPTextEmbeddings(nn.Module):
                     # remove the special token embedding
                     suffix = inputs_embeds[i, cbp:]
 
-                    input_embeds_ctx.append(torch.cat([prefix, ctx_embeddings[i], suffix], dim=0))
+                    input_embeds_ctx.append(ops.cat([prefix, ctx_embeddings[i], suffix], axis=0))
 
-                inputs_embeds = torch.stack(input_embeds_ctx, dim=0)
+                inputs_embeds = ops.stack(input_embeds_ctx, axis=0)
 
         position_embeddings = self.position_embedding(position_ids)
         embeddings = inputs_embeds + position_embeddings

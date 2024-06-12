@@ -40,11 +40,11 @@ EXAMPLE_DOC_STRING = """
         >>> prior_pipe = WuerstchenPriorPipeline.from_pretrained(
         ...     "warp-ai/wuerstchen-prior", mindspore_dtype=ms.float16
         ... )
-        >>> gen_pipe = WuerstchenDecoderPipeline.from_pretrain("warp-ai/wuerstchen", mindspore_dtype=ms.float16)
+        >>> gen_pipe = WuerstchenDecoderPipeline.from_pretrained("warp-ai/wuerstchen", mindspore_dtype=ms.float16)
 
         >>> prompt = "an image of a shiba inu, donning a spacesuit and helmet"
         >>> prior_output = pipe(prompt)
-        >>> images = gen_pipe(prior_output.image_embeddings, prompt=prompt)
+        >>> images = gen_pipe(prior_output[0], prompt=prompt)
         ```
 """
 
@@ -143,7 +143,7 @@ class WuerstchenDecoderPipeline(DiffusionPipeline):
             attention_mask = attention_mask[:, : self.tokenizer.model_max_length]
 
         text_encoder_output = self.text_encoder(text_input_ids, attention_mask=attention_mask)
-        text_encoder_hidden_states = text_encoder_output.last_hidden_state
+        text_encoder_hidden_states = text_encoder_output[0]
         text_encoder_hidden_states = text_encoder_hidden_states.repeat_interleave(num_images_per_prompt, dim=0)
 
         uncond_text_encoder_hidden_states = None
@@ -178,7 +178,7 @@ class WuerstchenDecoderPipeline(DiffusionPipeline):
                 ms.Tensor(uncond_input.input_ids), attention_mask=ms.Tensor(uncond_input.attention_mask)
             )
 
-            uncond_text_encoder_hidden_states = negative_prompt_embeds_text_encoder_output.last_hidden_state
+            uncond_text_encoder_hidden_states = negative_prompt_embeds_text_encoder_output[0]
 
             # duplicate unconditional embeddings for each generation per prompt, using mps friendly method
             seq_len = uncond_text_encoder_hidden_states.shape[1]
@@ -372,7 +372,7 @@ class WuerstchenDecoderPipeline(DiffusionPipeline):
         # 6. Run denoising loop
         self._num_timesteps = len(timesteps[:-1])
         for i, t in enumerate(self.progress_bar(timesteps[:-1])):
-            ratio = t.expand(latents.size(0)).to(dtype)
+            ratio = t.broadcast_to((latents.shape[0],)).to(dtype)
             # 7. Denoise latents
             predicted_latents = self.decoder(
                 ops.cat([latents] * 2) if self.do_classifier_free_guidance else latents,
@@ -384,7 +384,11 @@ class WuerstchenDecoderPipeline(DiffusionPipeline):
             # 8. Check for classifier free guidance and apply it
             if self.do_classifier_free_guidance:
                 predicted_latents_text, predicted_latents_uncond = predicted_latents.chunk(2)
-                predicted_latents = ops.lerp(predicted_latents_uncond, predicted_latents_text, self.guidance_scale)
+                predicted_latents = ops.lerp(
+                    predicted_latents_uncond,
+                    predicted_latents_text,
+                    ms.tensor(self.guidance_scale, dtype=predicted_latents_text.dtype),
+                )
 
             # 9. Renoise latents to next timestep
             latents = self.scheduler.step(
@@ -418,7 +422,7 @@ class WuerstchenDecoderPipeline(DiffusionPipeline):
         if not output_type == "latent":
             # 10. Scale and decode the image latents with vq-vae
             latents = self.vqgan.config.scale_factor * latents
-            images = self.vqgan.decode(latents).sample.clamp(0, 1)
+            images = self.vqgan.decode(latents)[0].clamp(0, 1)
             if output_type == "np":
                 images = images.permute((0, 2, 3, 1)).float().numpy()
             elif output_type == "pil":

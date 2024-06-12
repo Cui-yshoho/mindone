@@ -39,8 +39,8 @@ EXAMPLE_DOC_STRING = """
 
         >>> prompt = "red cat, 4k photo"
         >>> out = pipe_prior(prompt)
-        >>> image_emb = out.image_embeds
-        >>> negative_image_emb = out.negative_image_embeds
+        >>> image_emb = out[0]
+        >>> negative_image_emb = out[1]
 
         >>> pipe = KandinskyPipeline.from_pretrained("kandinsky-community/kandinsky-2-1")
 
@@ -372,9 +372,7 @@ class KandinskyPipeline(DiffusionPipeline):
                 callback(step_idx, t, latents)
 
         # post-processing
-        image = self.movq.decode(latents, force_not_quantize=True)["sample"]
-
-        self.maybe_free_model_hooks()
+        image = self.movq.decode(latents, force_not_quantize=True)[0]
 
         if output_type not in ["ms", "np", "pil"]:
             raise ValueError(f"Only the output types `ms`, `pil` and `np` are supported not output_type={output_type}")
@@ -382,7 +380,7 @@ class KandinskyPipeline(DiffusionPipeline):
         if output_type in ["np", "pil"]:
             image = image * 0.5 + 0.5
             image = image.clamp(0, 1)
-            image = image.permute((0, 2, 3, 1)).float().numpy()
+            image = image.permute(0, 2, 3, 1).float().numpy()
 
         if output_type == "pil":
             image = self.numpy_to_pil(image)

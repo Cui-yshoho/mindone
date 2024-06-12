@@ -169,7 +169,7 @@ class WuerstchenPriorPipeline(DiffusionPipeline, LoraLoaderMixin):
                 attention_mask = attention_mask[:, : self.tokenizer.model_max_length]
 
             text_encoder_output = self.text_encoder(text_input_ids, attention_mask=attention_mask)
-            prompt_embeds = text_encoder_output.last_hidden_state
+            prompt_embeds = text_encoder_output[0]
 
         prompt_embeds = prompt_embeds.to(dtype=self.text_encoder.dtype)
         prompt_embeds = prompt_embeds.repeat_interleave(num_images_per_prompt, dim=0)
@@ -205,7 +205,7 @@ class WuerstchenPriorPipeline(DiffusionPipeline, LoraLoaderMixin):
                 ms.Tensor(uncond_input.input_ids), attention_mask=ms.Tensor(uncond_input.attention_mask)
             )
 
-            negative_prompt_embeds = negative_prompt_embeds_text_encoder_output.last_hidden_state
+            negative_prompt_embeds = negative_prompt_embeds_text_encoder_output[0]
 
         if do_classifier_free_guidance:
             # duplicate unconditional embeddings for each generation per prompt, using mps friendly method
@@ -451,7 +451,7 @@ class WuerstchenPriorPipeline(DiffusionPipeline, LoraLoaderMixin):
         # 6. Run denoising loop
         self._num_timesteps = len(timesteps[:-1])
         for i, t in enumerate(self.progress_bar(timesteps[:-1])):
-            ratio = t.broadcast_to(latents.shape[0]).to(dtype)
+            ratio = t.broadcast_to((latents.shape[0],)).to(dtype)
 
             # 7. Denoise image embeddings
             predicted_image_embedding = self.prior(
@@ -464,7 +464,9 @@ class WuerstchenPriorPipeline(DiffusionPipeline, LoraLoaderMixin):
             if self.do_classifier_free_guidance:
                 predicted_image_embedding_text, predicted_image_embedding_uncond = predicted_image_embedding.chunk(2)
                 predicted_image_embedding = ops.lerp(
-                    predicted_image_embedding_uncond, predicted_image_embedding_text, self.guidance_scale
+                    predicted_image_embedding_uncond,
+                    predicted_image_embedding_text,
+                    ms.tensor(self.guidance_scale, dtype=predicted_image_embedding_text.dtype),
                 )
 
             # 9. Renoise latents to next timestep

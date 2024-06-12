@@ -43,28 +43,31 @@ _import_structure = {
         "KandinskyInpaintPipeline",
         "KandinskyPipeline",
         "KandinskyPriorPipeline",
-    ]
+    ],
+    "kandinsky2_2": [
+        "KandinskyV22CombinedPipeline",
+        "KandinskyV22ControlnetImg2ImgPipeline",
+        "KandinskyV22ControlnetPipeline",
+        "KandinskyV22Img2ImgCombinedPipeline",
+        "KandinskyV22Img2ImgPipeline",
+        "KandinskyV22InpaintCombinedPipeline",
+        "KandinskyV22InpaintPipeline",
+        "KandinskyV22Pipeline",
+        "KandinskyV22PriorEmb2EmbPipeline",
+        "KandinskyV22PriorPipeline",
+    ],
+    "kandinsky3": [
+        "Kandinsky3Img2ImgPipeline",
+        "Kandinsky3Pipeline",
+    ],
+    "blip_diffusion": ["BlipDiffusionPipeline"],
 }
 
 if TYPE_CHECKING:
+    from .blip_diffusion import BlipDiffusionPipeline
     from .consistency_models import ConsistencyModelPipeline
     from .ddim import DDIMPipeline
     from .ddpm import DDPMPipeline
-    from .latent_consistency_models import LatentConsistencyModelImg2ImgPipeline, LatentConsistencyModelPipeline
-    from .pipeline_utils import DiffusionPipeline, ImagePipelineOutput
-    from .stable_cascade import StableCascadeCombinedPipeline, StableCascadeDecoderPipeline, StableCascadePriorPipeline
-    from .stable_diffusion import StableDiffusionImg2ImgPipeline, StableDiffusionPipeline
-    from .stable_diffusion_xl import (
-        StableDiffusionXLImg2ImgPipeline,
-        StableDiffusionXLInpaintPipeline,
-        StableDiffusionXLPipeline,
-    )
-    from .wuerstchen import (
-        WuerstchenCombinedPipeline,
-        WuerstchenDecoderPipeline,
-        WuerstchenPriorPipeline,
-    )
-    from .stable_video_diffusion import StableVideoDiffusionPipeline
     from .kandinsky import (
         KandinskyCombinedPipeline,
         KandinskyImg2ImgCombinedPipeline,
@@ -74,6 +77,30 @@ if TYPE_CHECKING:
         KandinskyPipeline,
         KandinskyPriorPipeline,
     )
+    from .kandinsky2_2 import (
+        KandinskyV22CombinedPipeline,
+        KandinskyV22ControlnetImg2ImgPipeline,
+        KandinskyV22ControlnetPipeline,
+        KandinskyV22Img2ImgCombinedPipeline,
+        KandinskyV22Img2ImgPipeline,
+        KandinskyV22InpaintCombinedPipeline,
+        KandinskyV22InpaintPipeline,
+        KandinskyV22Pipeline,
+        KandinskyV22PriorEmb2EmbPipeline,
+        KandinskyV22PriorPipeline,
+    )
+    from .kandinsky3 import Kandinsky3Img2ImgPipeline, Kandinsky3Pipeline
+    from .latent_consistency_models import LatentConsistencyModelImg2ImgPipeline, LatentConsistencyModelPipeline
+    from .pipeline_utils import DiffusionPipeline, ImagePipelineOutput
+    from .stable_cascade import StableCascadeCombinedPipeline, StableCascadeDecoderPipeline, StableCascadePriorPipeline
+    from .stable_diffusion import StableDiffusionImg2ImgPipeline, StableDiffusionPipeline
+    from .stable_diffusion_xl import (
+        StableDiffusionXLImg2ImgPipeline,
+        StableDiffusionXLInpaintPipeline,
+        StableDiffusionXLPipeline,
+    )
+    from .stable_video_diffusion import StableVideoDiffusionPipeline
+    from .wuerstchen import WuerstchenCombinedPipeline, WuerstchenDecoderPipeline, WuerstchenPriorPipeline
 else:
     import sys
 

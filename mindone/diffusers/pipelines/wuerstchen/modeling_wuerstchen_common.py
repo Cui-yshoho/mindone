@@ -1,6 +1,7 @@
+import mindspore as ms
 from mindspore import nn, ops
 
-from ...models.activations import GELU, SiLU
+from ...models.activations import SiLU
 from ...models.attention_processor import Attention
 from ...models.normalization import LayerNorm
 
@@ -38,7 +39,7 @@ class ResBlock(nn.Cell):
         )
         self.norm = WuerstchenLayerNorm(c, elementwise_affine=False, eps=1e-6)
         self.channelwise = nn.SequentialCell(
-            linear_cls(c, c * 4), GELU(), GlobalResponseNorm(c * 4), nn.Dropout(p=dropout), linear_cls(c * 4, c)
+            linear_cls(c, c * 4), nn.GELU(), GlobalResponseNorm(c * 4), nn.Dropout(p=dropout), linear_cls(c * 4, c)
         )
 
     def construct(self, x, x_skip=None):
@@ -54,11 +55,11 @@ class ResBlock(nn.Cell):
 class GlobalResponseNorm(nn.Cell):
     def __init__(self, dim):
         super().__init__()
-        self.gamma = nn.Parameter(ops.zeros((1, 1, 1, dim)))
-        self.beta = nn.Parameter(ops.zeros((1, 1, 1, dim)))
+        self.gamma = ms.Parameter(ops.zeros((1, 1, 1, dim)), name="gamma")
+        self.beta = ms.Parameter(ops.zeros((1, 1, 1, dim)), name="beta")
 
     def construct(self, x):
-        agg_norm = ops.norm(x, ord=2, dim=(1, 2), keepdim=True)
+        agg_norm = ops.norm(x, ord="fro", dim=(1, 2), keepdim=True)
         stand_div_norm = agg_norm / (agg_norm.mean(axis=-1, keep_dims=True) + 1e-6)
         return self.gamma * (x * stand_div_norm) + self.beta + x
 
@@ -79,6 +80,6 @@ class AttnBlock(nn.Cell):
         norm_x = self.norm(x)
         if self.self_attn:
             batch_size, channel, _, _ = x.shape
-            kv = ops.cat([norm_x.view(batch_size, channel, -1).transpose(1, 2), kv], axis=1)
+            kv = ops.cat([norm_x.view(batch_size, channel, -1).transpose(0, 2, 1), kv], axis=1)
         x = x + self.attention(norm_x, encoder_hidden_states=kv)
         return x

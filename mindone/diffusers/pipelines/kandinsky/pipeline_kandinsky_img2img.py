@@ -260,7 +260,7 @@ class KandinskyImg2ImgPipeline(DiffusionPipeline):
         timesteps: ms.Tensor,
     ) -> ms.Tensor:
         broadcast_shape = original_samples.shape
-        betas = ops.linspace(0.0001, 0.02, 1000, dtype=ms.float32)
+        betas = ops.linspace(0.0001, 0.02, 1000).to(dtype=ms.float32)
         alphas = 1.0 - betas
         alphas_cumprod = ops.cumprod(alphas, dim=0)
         alphas_cumprod = alphas_cumprod.to(dtype=original_samples.dtype)
@@ -398,7 +398,7 @@ class KandinskyImg2ImgPipeline(DiffusionPipeline):
         image = ops.cat([prepare_image(i, width, height) for i in image], axis=0)
         image = image.to(dtype=prompt_embeds.dtype)
 
-        latents = self.movq.encode(image)["latents"]
+        latents = self.movq.encode(image)[0]
         latents = latents.repeat_interleave(num_images_per_prompt, dim=0)
 
         # 4. set timesteps
@@ -465,7 +465,7 @@ class KandinskyImg2ImgPipeline(DiffusionPipeline):
                 callback(step_idx, t, latents)
 
         # 7. post-processing
-        image = self.movq.decode(latents, force_not_quantize=True)["sample"]
+        image = self.movq.decode(latents, force_not_quantize=True)[0]
 
         if output_type not in ["ms", "np", "pil"]:
             raise ValueError(f"Only the output types `pt`, `pil` and `np` are supported not output_type={output_type}")

@@ -14,11 +14,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """MindSpore XLM-RoBERTa model."""
-import inspect
-import math
-from typing import Callable, List, Optional, Tuple, Union
+import numbers
+from typing import List, Optional, Tuple
 
-# from ...pytorch_utils import apply_chunking_to_forward, find_pruneable_heads_and_indices, prune_linear_layer
+import numpy as np
 from transformers.models.xlm_roberta.configuration_xlm_roberta import XLMRobertaConfig
 from transformers.utils import logging
 
@@ -26,8 +25,10 @@ import mindspore as ms
 from mindspore import nn, ops
 from mindspore.common.initializer import Normal, One, Zero, initializer
 
-from ...activations_ms import ACT2FN
-from ...modeling_ms_utils import MSPreTrainedModel
+from ...activations import ACT2FN
+from ...mindspore_utils import find_pruneable_heads_and_indices, prune_linear_layer
+from ...modeling_outputs import BaseModelOutputWithPastAndCrossAttentions, BaseModelOutputWithPoolingAndCrossAttentions
+from ...modeling_utils import MSPreTrainedModel
 
 logger = logging.get_logger(__name__)
 
@@ -50,7 +51,7 @@ class XLMRobertaEmbeddings(nn.Cell):
 
         # self.LayerNorm is not snake-cased to stick with TensorFlow model variable name and be able to load
         # any TensorFlow checkpoint file
-        self.LayerNorm = nn.LayerNorm(config.hidden_size, epsilon=config.layer_norm_eps)
+        self.LayerNorm = LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(p=config.hidden_dropout_prob)
         # position_ids (1, len position emb) is contiguous in memory and exported when serialized
         self.position_embedding_type = getattr(config, "position_embedding_type", "absolute")
@@ -148,7 +149,7 @@ class XLMRobertaSelfAttention(nn.Cell):
         self.is_decoder = config.is_decoder
 
     def transpose_for_scores(self, x: ms.Tensor) -> ms.Tensor:
-        new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
+        new_x_shape = x.shape[:-1] + (self.num_attention_heads, self.attention_head_size)
         x = x.view(new_x_shape)
         return x.permute((0, 2, 1, 3))
 
@@ -201,7 +202,7 @@ class XLMRobertaSelfAttention(nn.Cell):
             past_key_value = (key_layer, value_layer)
 
         # Take the dot product between "query" and "key" to get the raw attention scores.
-        attention_scores = ops.matmul(query_layer, key_layer.transpose((-1, -2)))
+        attention_scores = ops.matmul(query_layer, key_layer.swapaxes(-1, -2))
 
         if self.position_embedding_type == "relative_key" or self.position_embedding_type == "relative_key_query":
             query_length, key_length = query_layer.shape[2], key_layer.shape[2]
@@ -229,7 +230,9 @@ class XLMRobertaSelfAttention(nn.Cell):
                 ).sum(-1)
                 attention_scores = attention_scores + relative_position_scores_query + relative_position_scores_key
 
-        attention_scores = attention_scores / math.sqrt(self.attention_head_size)
+        attention_scores = attention_scores / ops.sqrt(
+            ms.tensor(self.attention_head_size, dtype=attention_scores.dtype)
+        )
         if attention_mask is not None:
             # Apply the attention mask is (precomputed for all layers in XLMRobertaModel forward() function)
             attention_scores = attention_scores + attention_mask
@@ -263,8 +266,8 @@ class XLMRobertaSelfOutput(nn.Cell):
     def __init__(self, config):
         super().__init__()
         self.dense = nn.Dense(config.hidden_size, config.hidden_size)
-        self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.LayerNorm = LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.dropout = nn.Dropout(p=config.hidden_dropout_prob)
 
     def construct(self, hidden_states: ms.Tensor, input_tensor: ms.Tensor) -> ms.Tensor:
         hidden_states = self.dense(hidden_states)
@@ -286,91 +289,25 @@ class XLMRobertaAttention(nn.Cell):
             config, position_embedding_type=position_embedding_type
         )
         self.output = XLMRobertaSelfOutput(config)
-        self.pruned_heads = []
-
-    def find_pruneable_heads_and_indices(
-        heads: List[int], n_heads: int, head_size: int, already_pruned_heads: List[int]
-    ):
-        """
-        Finds the heads and their indices taking `already_pruned_heads` into account.
-
-        Args:
-            heads (`List[int]`): List of the indices of heads to prune.
-            n_heads (`int`): The number of heads in the model.
-            head_size (`int`): The size of each head.
-            already_pruned_heads (`Set[int]`): A set of already pruned heads.
-
-        Returns:
-            `Tuple[Set[int], Tensor]`: A tuple with the indices of heads to prune taking `already_pruned_heads`
-            into account and the indices of rows/columns to keep in the layer weight.
-        """
-        mask = ops.ones((n_heads, head_size))
-        head_list = []
-        for i in heads:
-            if i not in already_pruned_heads:
-                head_list.append(i)
-        for head in head_list:
-            # Compute how many pruned heads are before the head and move the index accordingly
-            head = head - sum(1 if h < head else 0 for h in already_pruned_heads)
-            mask[head] = 0
-        mask = mask.view(-1).equal(1)
-        index: ms.int64 = ops.arange(len(mask))[mask].long()
-        return head_list, index
-
-    def prune_linear_layer(layer: nn.Dense, index: ms.int64, dim: int = 0) -> nn.Dense:
-        """
-        Prune a linear layer to keep only entries in index.
-
-        Used to remove heads.
-
-        Args:
-            layer (`nn.Dense`): The layer to prune.
-            index (`Tensor`): The indices to keep in the layer.
-            dim (`int`, *optional*, defaults to 0): The dimension on which to keep the indices.
-
-        Returns:
-            `nn.Dense`: The pruned layer as a new layer with `requires_grad=True`.
-        """
-        index = index
-        W = layer.weight.index_select(dim, index).copy()
-        if layer.bias is not None:
-            if dim == 1:
-                b = layer.bias.copy()
-            else:
-                b = layer.bias[index].copy()
-        new_size = list(layer.weight.size())
-        new_size[dim] = len(index)
-        new_layer = nn.Dense(new_size[1], new_size[0], has_bias=layer.bias is not None)
-        new_layer.weight.requires_grad = False
-        new_layer.weight.copy_(W.contiguous())
-        new_layer.weight.requires_grad = True
-        if layer.bias is not None:
-            new_layer.bias.requires_grad = False
-            # new_layer.bias.copy_(b)
-            new_layer.bias = b.copy()
-            new_layer.bias.requires_grad = True
-        return new_layer
+        self.pruned_heads = set()
 
     def prune_heads(self, heads):
         if len(heads) == 0:
             return
-        heads, index = self.find_pruneable_heads_and_indices(
+        heads, index = find_pruneable_heads_and_indices(
             heads, self.self.num_attention_heads, self.self.attention_head_size, self.pruned_heads
         )
 
         # Prune linear layers
-        self.self.query = self.prune_linear_layer(self.self.query, index)
-        self.self.key = self.prune_linear_layer(self.self.key, index)
-        self.self.value = self.prune_linear_layer(self.self.value, index)
-        self.output.dense = self.prune_linear_layer(self.output.dense, index, dim=1)
+        self.self.query = prune_linear_layer(self.self.query, index)
+        self.self.key = prune_linear_layer(self.self.key, index)
+        self.self.value = prune_linear_layer(self.self.value, index)
+        self.output.dense = prune_linear_layer(self.output.dense, index, dim=1)
 
         # Update hyper params and store pruned heads
         self.self.num_attention_heads = self.self.num_attention_heads - len(heads)
         self.self.all_head_size = self.self.attention_head_size * self.self.num_attention_heads
-        # self.pruned_heads = self.pruned_heads.union(heads)
-        for i in heads:
-            if i not in self.pruned_heads:
-                self.pruned_heads.append(i)
+        self.pruned_heads = self.pruned_heads.union(heads)
 
     def construct(
         self,
@@ -417,7 +354,7 @@ class XLMRobertaOutput(nn.Cell):
     def __init__(self, config):
         super().__init__()
         self.dense = nn.Dense(config.intermediate_size, config.hidden_size)
-        self.LayerNorm = nn.LayerNorm(config.hidden_size, epsilon=config.layer_norm_eps)
+        self.LayerNorm = LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(p=config.hidden_dropout_prob)
 
     def construct(self, hidden_states: ms.Tensor, input_tensor: ms.Tensor) -> ms.Tensor:
@@ -442,84 +379,6 @@ class XLMRobertaLayer(nn.Cell):
             self.crossattention = XLMRobertaAttention(config, position_embedding_type="absolute")
         self.intermediate = XLMRobertaIntermediate(config)
         self.output = XLMRobertaOutput(config)
-
-    def apply_chunking_to_forward(
-        forward_fn: Callable[..., ms.Tensor], chunk_size: int, chunk_dim: int, *input_tensors
-    ) -> ms.Tensor:
-        """
-        This function chunks the `input_tensors` into smaller input tensor parts of size `chunk_size` over the dimension
-        `chunk_dim`. It then applies a layer `forward_fn` to each chunk independently to save memory.
-
-        If the `forward_fn` is independent across the `chunk_dim` this function will yield the same result as directly
-        applying `forward_fn` to `input_tensors`.
-
-        Args:
-            forward_fn (`Callable[..., ms.Tensor]`):
-                The forward function of the model.
-            chunk_size (`int`):
-                The chunk size of a chunked tensor: `num_chunks = len(input_tensors[0]) / chunk_size`.
-            chunk_dim (`int`):
-                The dimension over which the `input_tensors` should be chunked.
-            input_tensors (`Tuple[ms.Tensor]`):
-                The input tensors of `forward_fn` which will be chunked
-
-        Returns:
-            `ms.Tensor`: A tensor with the same shape as the `forward_fn` would have given if applied`.
-
-
-        Examples:
-
-        ```python
-        # rename the usual forward() fn to forward_chunk()
-        def forward_chunk(self, hidden_states):
-            hidden_states = self.decoder(hidden_states)
-            return hidden_states
-
-
-        # implement a chunked forward function
-        def forward(self, hidden_states):
-            return apply_chunking_to_forward(self.forward_chunk, self.chunk_size_lm_head, self.seq_len_dim, hidden_states)
-        ```"""
-
-        assert len(input_tensors) > 0, f"{input_tensors} has to be a tuple/list of tensors"
-
-        # inspect.signature exist since python 3.5 and is a python method -> no problem with backward compatibility
-        num_args_in_forward_chunk_fn = len(inspect.signature(forward_fn).parameters)
-        if num_args_in_forward_chunk_fn != len(input_tensors):
-            raise ValueError(
-                f"forward_chunk_fn expects {num_args_in_forward_chunk_fn} arguments, but only {len(input_tensors)} input "
-                "tensors are given"
-            )
-
-        if chunk_size > 0:
-            tensor_shape = input_tensors[0].shape[chunk_dim]
-            for input_tensor in input_tensors:
-                if input_tensor.shape[chunk_dim] != tensor_shape:
-                    raise ValueError(
-                        f"All input tenors have to be of the same shape: {tensor_shape}, "
-                        f"found shape {input_tensor.shape[chunk_dim]}"
-                    )
-
-            if input_tensors[0].shape[chunk_dim] % chunk_size != 0:
-                raise ValueError(
-                    f"The dimension to be chunked {input_tensors[0].shape[chunk_dim]} has to be a multiple of the chunk "
-                    f"size {chunk_size}"
-                )
-
-            num_chunks = input_tensors[0].shape[chunk_dim] // chunk_size
-
-            # chunk input tensor into tuples
-            input_tensors_chunks = tuple(
-                input_tensor.chunk(num_chunks, axis=chunk_dim) for input_tensor in input_tensors
-            )
-            # apply forward fn to every tuple
-            output_chunks = tuple(
-                forward_fn(*input_tensors_chunk) for input_tensors_chunk in zip(*input_tensors_chunks)
-            )
-            # concatenate output at same dimension
-            return ops.cat(output_chunks, axis=chunk_dim)
-
-        return forward_fn(*input_tensors)
 
     def construct(
         self,
@@ -575,9 +434,7 @@ class XLMRobertaLayer(nn.Cell):
             cross_attn_present_key_value = cross_attention_outputs[-1]
             present_key_value = present_key_value + cross_attn_present_key_value
 
-        layer_output = self.apply_chunking_to_forward(
-            self.feed_forward_chunk, self.chunk_size_feed_forward, self.seq_len_dim, attention_output
-        )
+        layer_output = self.feed_forward_chunk(attention_output)
         outputs = (layer_output,) + outputs
 
         # if decoder, return the attn key/values as the last output
@@ -678,7 +535,13 @@ class XLMRobertaEncoder(nn.Cell):
                 if v is not None
             )
 
-        return hidden_states, next_decoder_cache, all_hidden_states, all_self_attentions, all_cross_attentions
+        return BaseModelOutputWithPastAndCrossAttentions(
+            last_hidden_state=hidden_states,
+            past_key_values=next_decoder_cache,
+            hidden_states=all_hidden_states,
+            attentions=all_self_attentions,
+            cross_attentions=all_cross_attentions,
+        )
 
 
 # Copied from transformers.models.roberta.modeling_roberta.RobertaPooler with Roberta->XLMRoberta
@@ -723,20 +586,18 @@ class XLMRobertaPreTrainedModel(MSPreTrainedModel):
             if module.bias is not None:
                 module.bias.set_data(initializer(Zero(), module.bias.shape, module.bias.dtype))
         elif isinstance(module, nn.Embedding):
-            module.weight.set_data(
+            module.embedding_table.set_data(
                 initializer(
-                    Normal(sigma=self.config.initializer_range, mean=0.0), module.weight.shape, module.weight.dtype
+                    Normal(sigma=self.config.initializer_range, mean=0.0),
+                    module.embedding_table.shape,
+                    module.embedding_table.dtype,
                 )
             )
             if module.padding_idx is not None:
-                module.weight[module.padding_idx](
-                    initializer(
-                        Zero(), module.weight[module.padding_idx].shape, module.weight[module.padding_idx].dtype
-                    )
-                )
-        elif isinstance(module, nn.LayerNorm):
-            module.bias.set_data(initializer(Zero(), module.bias.shape, module.bias.dtype))
-            module.weight.set_data(initializer(One(), module.weight.shape, module.weight.dtype))
+                module.embedding_table[module.padding_idx] = 0
+        elif isinstance(module, LayerNorm):
+            module.beta.set_data(initializer(Zero(), module.beta.shape, module.beta.dtype))
+            module.gamma.set_data(initializer(One(), module.gamma.shape, module.gamma.dtype))
 
 
 # Copied from transformers.models.roberta.modeling_roberta.RobertaModel with Roberta->XLMRoberta, ROBERTA->XLM_ROBERTA
@@ -763,7 +624,7 @@ class XLMRobertaModel(XLMRobertaPreTrainedModel):
 
         self.embeddings = XLMRobertaEmbeddings(config)
         self.encoder = XLMRobertaEncoder(config)
-
+        self.is_decoder = config.is_decoder
         self.pooler = XLMRobertaPooler(config) if add_pooling_layer else None
 
         # Initialize weights and apply final processing
@@ -859,13 +720,12 @@ class XLMRobertaModel(XLMRobertaPreTrainedModel):
 
         # We can provide a self-attention mask of dimensions [batch_size, from_seq_length, to_seq_length]
         # ourselves in which case we just need to make it broadcastable to all heads.
-        extended_attention_mask: ms.Tensor = self.get_extended_attention_mask(attention_mask, input_shape)
+        extended_attention_mask = self.get_extended_attention_mask(attention_mask, input_shape)
 
         # If a 2D or 3D attention mask is provided for the cross-attention
         # we need to make broadcastable to [batch_size, num_heads, seq_length, seq_length]
         if self.config.is_decoder and encoder_hidden_states is not None:
-            encoder_batch_size, encoder_sequence_length, _ = encoder_hidden_states.shape
-            encoder_hidden_shape = (encoder_batch_size, encoder_sequence_length)
+            encoder_hidden_shape = encoder_hidden_states.shape[:2]
             if encoder_attention_mask is None:
                 encoder_attention_mask = ops.ones(encoder_hidden_shape)
             encoder_extended_attention_mask = self.invert_attention_mask(encoder_attention_mask)
@@ -904,6 +764,15 @@ class XLMRobertaModel(XLMRobertaPreTrainedModel):
         if not return_dict:
             return (sequence_output, pooled_output) + encoder_outputs[1:]
 
+        return BaseModelOutputWithPoolingAndCrossAttentions(
+            last_hidden_state=sequence_output,
+            pooler_output=pooled_output,
+            past_key_values=encoder_outputs.past_key_values,
+            hidden_states=encoder_outputs.hidden_states,
+            attentions=encoder_outputs.attentions,
+            cross_attentions=encoder_outputs.cross_attentions,
+        )
+
 
 # Copied from transformers.models.roberta.modeling_roberta.create_position_ids_from_input_ids
 def create_position_ids_from_input_ids(input_ids, padding_idx, past_key_values_length=0):
@@ -920,3 +789,106 @@ def create_position_ids_from_input_ids(input_ids, padding_idx, past_key_values_l
     mask = input_ids.ne(padding_idx).int()
     incremental_indices = (ops.cumsum(mask, axis=1).type_as(mask) + past_key_values_length) * mask
     return incremental_indices.long() + padding_idx
+
+
+class LayerNorm(nn.Cell):
+    r"""Applies Layer Normalization over a mini-batch of inputs.
+
+    This layer implements the operation as described in
+    the paper `Layer Normalization <https://arxiv.org/abs/1607.06450>`__
+
+    .. math::
+        y = \frac{x - \mathrm{E}[x]}{ \sqrt{\mathrm{Var}[x] + \epsilon}} * \gamma + \beta
+
+    The mean and standard-deviation are calculated over the last `D` dimensions, where `D`
+    is the dimension of :attr:`normalized_shape`. For example, if :attr:`normalized_shape`
+    is ``(3, 5)`` (a 2-dimensional shape), the mean and standard-deviation are computed over
+    the last 2 dimensions of the input (i.e. ``input.mean((-2, -1))``).
+    :math:`\gamma` and :math:`\beta` are learnable affine transform parameters of
+    :attr:`normalized_shape` if :attr:`elementwise_affine` is ``True``.
+    The standard-deviation is calculated via the biased estimator, equivalent to
+    `ops.var(input, unbiased=False)`.
+
+    .. note::
+        Unlike Batch Normalization and Instance Normalization, which applies
+        scalar scale and bias for each entire channel/plane with the
+        :attr:`affine` option, Layer Normalization applies per-element scale and
+        bias with :attr:`elementwise_affine`.
+
+    This layer uses statistics computed from input data in both training and
+    evaluation modes.
+
+    Args:
+        normalized_shape (int or list): input shape from an expected input
+            of size
+
+            .. math::
+                [* \times \text{normalized\_shape}[0] \times \text{normalized\_shape}[1]
+                    \times \ldots \times \text{normalized\_shape}[-1]]
+
+            If a single integer is used, it is treated as a singleton list, and this module will
+            normalize over the last dimension which is expected to be of that specific size.
+        eps: a value added to the denominator for numerical stability. Default: 1e-5
+        elementwise_affine: a boolean value that when set to ``True``, this module
+            has learnable per-element affine parameters initialized to ones (for weights)
+            and zeros (for biases). Default: ``True``.
+
+    Attributes:
+        weight: the learnable weights of the module of shape
+            :math:`\text{normalized\_shape}` when :attr:`elementwise_affine` is set to ``True``.
+            The values are initialized to 1.
+        bias:   the learnable bias of the module of shape
+                :math:`\text{normalized\_shape}` when :attr:`elementwise_affine` is set to ``True``.
+                The values are initialized to 0.
+
+    Shape:
+        - Input: :math:`(N, *)`
+        - Output: :math:`(N, *)` (same shape as input)
+
+    Examples::
+
+        >>> # NLP Example
+        >>> batch, sentence_length, embedding_dim = 20, 5, 10
+        >>> embedding = ops.randn(batch, sentence_length, embedding_dim)
+        >>> layer_norm = LayerNorm(embedding_dim)
+        >>> # Activate module
+        >>> layer_norm(embedding)
+        >>>
+        >>> # Image Example
+        >>> N, C, H, W = 20, 5, 10, 10
+        >>> input = ops.randn(N, C, H, W)
+        >>> # Normalize over the last three dimensions (i.e. the channel and spatial dimensions)
+        >>> # as shown in the image below
+        >>> layer_norm = LayerNorm([C, H, W])
+        >>> output = layer_norm(input)
+    """
+
+    normalized_shape: Tuple[int, ...]
+    eps: float
+    elementwise_affine: bool
+
+    def __init__(self, normalized_shape, eps=1e-5, elementwise_affine: bool = True, dtype=ms.float32, bias=True):
+        super().__init__()
+        if isinstance(normalized_shape, numbers.Integral):
+            normalized_shape = (normalized_shape,)
+        self.normalized_shape = tuple(normalized_shape)
+        self.eps = eps
+        self.elementwise_affine = elementwise_affine
+        _weight = np.ones(normalized_shape, dtype=ms.dtype_to_nptype(dtype))
+        _bias = np.zeros(normalized_shape, dtype=ms.dtype_to_nptype(dtype))
+        if self.elementwise_affine:
+            self.weight = ms.Parameter(ms.Tensor.from_numpy(_weight))
+            if bias:
+                self.bias = ms.Parameter(ms.Tensor.from_numpy(_bias))
+            else:
+                self.bias = ms.Tensor.from_numpy(_bias)
+        else:
+            self.weight = ms.Tensor.from_numpy(_weight)
+            self.bias = ms.Tensor.from_numpy(_bias)
+        # TODO: In fact, we need -len(normalized_shape) instead of -1, but LayerNorm doesn't allow it.
+        #  For positive axis, the ndim of input is needed. Put it in construct?
+        self.layer_norm = ops.LayerNorm(-1, -1, epsilon=eps)
+
+    def construct(self, x: ms.Tensor):
+        x, _, _ = self.layer_norm(x, self.weight, self.bias)
+        return x

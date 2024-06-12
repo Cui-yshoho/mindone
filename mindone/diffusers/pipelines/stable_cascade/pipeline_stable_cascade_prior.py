@@ -162,10 +162,10 @@ class StableCascadePriorPipeline(DiffusionPipeline):
                 truncation=True,
                 return_tensors="np",
             )
-            text_input_ids = text_inputs.input_ids
-            attention_mask = text_inputs.attention_mask
+            text_input_ids = ms.tensor(text_inputs.input_ids)
+            attention_mask = ms.tensor(text_inputs.attention_mask)
 
-            untruncated_ids = self.tokenizer(prompt, padding="longest", return_tensors="np").input_ids
+            untruncated_ids = ms.tensor(self.tokenizer(prompt, padding="longest", return_tensors="np").input_ids)
 
             if untruncated_ids.shape[-1] >= text_input_ids.shape[-1] and not ops.equal(text_input_ids, untruncated_ids):
                 removed_text = self.tokenizer.batch_decode(untruncated_ids[:, self.tokenizer.model_max_length - 1 : -1])
@@ -177,11 +177,11 @@ class StableCascadePriorPipeline(DiffusionPipeline):
                 attention_mask = attention_mask[:, : self.tokenizer.model_max_length]
 
             text_encoder_output = self.text_encoder(
-                ms.Tensor(text_input_ids), attention_mask=ms.Tensor(attention_mask), output_hidden_states=True
+                text_input_ids, attention_mask=attention_mask, output_hidden_states=True
             )
-            prompt_embeds = text_encoder_output.hidden_states[-1]
+            prompt_embeds = text_encoder_output[2][-1]
             if prompt_embeds_pooled is None:
-                prompt_embeds_pooled = text_encoder_output.text_embeds.unsqueeze(1)
+                prompt_embeds_pooled = text_encoder_output[0].unsqueeze(1)
 
         prompt_embeds = prompt_embeds.to(dtype=self.text_encoder.dtype)
         prompt_embeds_pooled = prompt_embeds_pooled.to(dtype=self.text_encoder.dtype)
@@ -221,8 +221,8 @@ class StableCascadePriorPipeline(DiffusionPipeline):
                 output_hidden_states=True,
             )
 
-            negative_prompt_embeds = negative_prompt_embeds_text_encoder_output.hidden_states[-1]
-            negative_prompt_embeds_pooled = negative_prompt_embeds_text_encoder_output.text_embeds.unsqueeze(1)
+            negative_prompt_embeds = negative_prompt_embeds_text_encoder_output[2][-1]
+            negative_prompt_embeds_pooled = negative_prompt_embeds_text_encoder_output[0].unsqueeze(1)
 
         if do_classifier_free_guidance:
             # duplicate unconditional embeddings for each generation per prompt, using mps friendly method
@@ -246,7 +246,7 @@ class StableCascadePriorPipeline(DiffusionPipeline):
         for image in images:
             image = self.feature_extractor(image, return_tensors="np").pixel_values
             image = ms.tensor(image, dtype=dtype)
-            image_embed = self.image_encoder(image).image_embeds.unsqueeze(1)
+            image_embed = self.image_encoder(image)[0].unsqueeze(1)
             image_embeds.append(image_embed)
         image_embeds = ops.cat(image_embeds, axis=1)
 
@@ -551,13 +551,13 @@ class StableCascadePriorPipeline(DiffusionPipeline):
             if not isinstance(self.scheduler, DDPMWuerstchenScheduler):
                 if len(alphas_cumprod) > 0:
                     timestep_ratio = self.get_timestep_ratio_conditioning(t.long(), alphas_cumprod)
-                    timestep_ratio = timestep_ratio.broadcast_to(latents.shape[0]).to(dtype)
+                    timestep_ratio = timestep_ratio.broadcast_to((latents.shape[0],)).to(dtype)
                 else:
                     timestep_ratio = (
-                        t.float().div(self.scheduler.timesteps[-1]).broadcast_to(latents.shape[0]).to(dtype)
+                        t.float().div(self.scheduler.timesteps[-1]).broadcast_to((latents.shape[0],)).to(dtype)
                     )
             else:
-                timestep_ratio = t.broadcast_to(latents.shape[0]).to(dtype)
+                timestep_ratio = t.broadcast_to((latents.shape[0],)).to(dtype)
             # 7. Denoise image embeddings
             predicted_image_embedding = self.prior(
                 sample=ops.cat([latents] * 2) if self.do_classifier_free_guidance else latents,
@@ -572,7 +572,9 @@ class StableCascadePriorPipeline(DiffusionPipeline):
             if self.do_classifier_free_guidance:
                 predicted_image_embedding_text, predicted_image_embedding_uncond = predicted_image_embedding.chunk(2)
                 predicted_image_embedding = ops.lerp(
-                    predicted_image_embedding_uncond, predicted_image_embedding_text, self.guidance_scale
+                    predicted_image_embedding_uncond,
+                    predicted_image_embedding_text,
+                    ms.tensor(self.guidance_scale, dtype=predicted_image_embedding_text.dtype),
                 )
 
             # 9. Renoise latents to next timestep
@@ -580,7 +582,7 @@ class StableCascadePriorPipeline(DiffusionPipeline):
                 timestep_ratio = t
             latents = self.scheduler.step(
                 model_output=predicted_image_embedding, timestep=timestep_ratio, sample=latents, generator=generator
-            ).prev_sample
+            )[0]
 
             if callback_on_step_end is not None:
                 callback_kwargs = {}

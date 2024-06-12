@@ -35,7 +35,7 @@ TEXT2IMAGE_EXAMPLE_DOC_STRING = """
         >>> from mindone.diffusers import WuerstchenCombinedPipeline
         >>> import mindspore as ms
 
-        >>> pipe = WuerstchenCombinedPipeline.from_pretrained("warp-ai/Wuerstchen", mindspore_dtype=ms.float16))
+        >>> pipe = WuerstchenCombinedPipeline.from_pretrained("warp-ai/wuerstchen", mindspore_dtype=ms.float16)
         >>> prompt = "an image of a shiba inu, donning a spacesuit and helmet"
         >>> images = pipe(prompt=prompt)
         ```

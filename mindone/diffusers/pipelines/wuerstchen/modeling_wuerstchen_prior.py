@@ -49,12 +49,12 @@ class WuerstchenPrior(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin, Peft
             linear_cls(c, c),
         )
 
-        blocks = nn.CellList()
+        blocks = []
         for _ in range(depth):
             blocks.append(ResBlock(c, dropout=dropout))
             blocks.append(TimestepBlock(c, c_r))
             blocks.append(AttnBlock(c, c, nhead, self_attn=True, dropout=dropout))
-        self.blocks = blocks
+        self.blocks = nn.CellList(blocks)
         self.out = nn.SequentialCell(
             WuerstchenLayerNorm(c, elementwise_affine=False, eps=1e-6),
             conv_cls(c, c_in * 2, kernel_size=1, has_bias=True, pad_mode="valid"),
@@ -76,7 +76,7 @@ class WuerstchenPrior(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin, Peft
 
         def fn_recursive_add_processors(name: str, module: nn.Cell, processors: Dict[str, AttentionProcessor]):
             if hasattr(module, "get_processor"):
-                processors[f"{name}.processor"] = module.get_processor(return_deprecated_lora=True)
+                processors[f"{name}.processor"] = module.get_processor()
 
             for sub_name, child in module.name_cells().items():
                 fn_recursive_add_processors(f"{name}.{sub_name}", child, processors)

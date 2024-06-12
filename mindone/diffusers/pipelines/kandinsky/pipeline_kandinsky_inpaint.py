@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from copy import deepcopy
 from typing import Callable, List, Optional, Union
 
 import numpy as np
@@ -22,7 +21,7 @@ from PIL import Image
 from transformers import XLMRobertaTokenizer
 
 import mindspore as ms
-from mindspore import nn, ops
+from mindspore import ops
 
 from ... import __version__
 from ...models import UNet2DConditionModel, VQModel
@@ -91,7 +90,7 @@ def get_new_h_w(h, w, scale_factor=8):
 def prepare_mask(masks):
     prepared_masks = []
     for mask in masks:
-        old_mask = deepcopy(mask)
+        old_mask = mask.copy()
         for i in range(mask.shape[1]):
             for j in range(mask.shape[2]):
                 if old_mask[0][i][j] == 1:
@@ -508,7 +507,7 @@ class KandinskyInpaintPipeline(DiffusionPipeline):
         mask_image, image = prepare_mask_and_masked_image(image, mask_image, height, width)
 
         image = image.to(dtype=prompt_embeds.dtype)
-        image = self.movq.encode(image)["latents"]
+        image = self.movq.encode(image)[0]
 
         mask_image = mask_image.to(dtype=prompt_embeds.dtype)
 
@@ -525,7 +524,7 @@ class KandinskyInpaintPipeline(DiffusionPipeline):
         masked_image = masked_image.repeat_interleave(num_images_per_prompt, dim=0)
         if do_classifier_free_guidance:
             mask_image = mask_image.tile((2, 1, 1, 1))
-            masked_image = masked_image.repeat(2, 1, 1, 1)
+            masked_image = masked_image.tile((2, 1, 1, 1))
 
         self.scheduler.set_timesteps(num_inference_steps)
         timesteps_tensor = self.scheduler.timesteps
@@ -596,7 +595,7 @@ class KandinskyInpaintPipeline(DiffusionPipeline):
                 callback(step_idx, t, latents)
 
         # post-processing
-        image = self.movq.decode(latents, force_not_quantize=True)["sample"]
+        image = self.movq.decode(latents, force_not_quantize=True)[0]
 
         if output_type not in ["ms", "np", "pil"]:
             raise ValueError(f"Only the output types `pt`, `pil` and `np` are supported not output_type={output_type}")

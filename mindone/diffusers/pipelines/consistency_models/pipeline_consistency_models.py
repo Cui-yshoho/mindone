@@ -72,8 +72,6 @@ class ConsistencyModelPipeline(DiffusionPipeline):
             compatible with [`CMStochasticIterativeScheduler`].
     """
 
-    model_cpu_offload_seq = "unet"
-
     def __init__(self, unet: UNet2DModel, scheduler: CMStochasticIterativeScheduler) -> None:
         super().__init__()
 
@@ -103,18 +101,18 @@ class ConsistencyModelPipeline(DiffusionPipeline):
 
     # Follows diffusers.VaeImageProcessor.postprocess
     def postprocess_image(self, sample: ms.Tensor, output_type: str = "pil"):
-        if output_type not in ["pt", "np", "pil"]:
+        if output_type not in ["ms", "np", "pil"]:
             raise ValueError(
                 f"output_type={output_type} is not supported. Make sure to choose one of ['pt', 'np', or 'pil']"
             )
 
         # Equivalent to diffusers.VaeImageProcessor.denormalize
         sample = (sample / 2 + 0.5).clamp(0, 1)
-        if output_type == "pt":
+        if output_type == "ms":
             return sample
 
         # Equivalent to diffusers.VaeImageProcessor.pt_to_numpy
-        sample = sample.permute(0, 2, 3, 1).numpy()
+        sample = sample.permute((0, 2, 3, 1)).numpy()
         if output_type == "np":
             return sample
 

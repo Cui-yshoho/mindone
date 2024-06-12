@@ -42,8 +42,8 @@ EXAMPLE_DOC_STRING = """
 
         >>> prompt = "red cat, 4k photo"
         >>> out = pipe_prior(prompt)
-        >>> image_emb = out.image_embeds
-        >>> negative_image_emb = out.negative_image_embeds
+        >>> image_emb = out[0]
+        >>> negative_image_emb = out[1]
 
         >>> pipe = KandinskyPipeline.from_pretrained("kandinsky-community/kandinsky-2-1")
 
@@ -228,18 +228,17 @@ class KandinskyPriorPipeline(DiffusionPipeline):
                     latents=latents,
                     negative_prompt=negative_prior_prompt,
                     guidance_scale=guidance_scale,
-                ).image_embeds
+                )[0]
 
             elif isinstance(cond, (PIL.Image.Image, ms.Tensor)):
                 if isinstance(cond, PIL.Image.Image):
                     cond = (
-                        self.image_processor(cond, return_tensors="ms")
-                        .pixel_values[0]
+                        ms.tensor(self.image_processor(cond, return_tensors="np").pixel_values[0])
                         .unsqueeze(0)
                         .to(dtype=self.image_encoder.dtype)
                     )
 
-                image_emb = self.image_encoder(cond)["image_embeds"]
+                image_emb = self.image_encoder(cond)[0]
 
             else:
                 raise ValueError(
@@ -259,9 +258,9 @@ class KandinskyPriorPipeline(DiffusionPipeline):
             negative_prompt=negative_prior_prompt,
             guidance_scale=guidance_scale,
         )
-        zero_image_emb = out_zero.negative_image_embeds if negative_prompt == "" else out_zero.image_embeds
+        zero_image_emb = out_zero[1] if negative_prompt == "" else out_zero[0]
 
-        return KandinskyPriorPipelineOutput(image_embeds=image_emb, negative_image_embeds=zero_image_emb)
+        return (image_emb, zero_image_emb)
 
     # Copied from diffusers.pipelines.unclip.pipeline_unclip.UnCLIPPipeline.prepare_latents
     def prepare_latents(self, shape, dtype, generator, latents, scheduler):
@@ -278,7 +277,7 @@ class KandinskyPriorPipeline(DiffusionPipeline):
         zero_img = ops.zeros((1, 3, self.image_encoder.config.image_size, self.image_encoder.config.image_size)).to(
             dtype=self.image_encoder.dtype
         )
-        zero_image_emb = self.image_encoder(zero_img)["image_embeds"]
+        zero_image_emb = self.image_encoder(zero_img)[0]
         zero_image_emb = zero_image_emb.tile((batch_size, 1))
         return zero_image_emb
 
@@ -299,7 +298,7 @@ class KandinskyPriorPipeline(DiffusionPipeline):
             return_tensors="np",
         )
         text_input_ids = ms.Tensor(text_inputs.input_ids)
-        text_mask = ms.Tensor(text_inputs.attention_mask.bool())
+        text_mask = ms.Tensor(text_inputs.attention_mask)
 
         untruncated_ids = ms.Tensor(self.tokenizer(prompt, padding="longest", return_tensors="np").input_ids)
 
@@ -313,8 +312,8 @@ class KandinskyPriorPipeline(DiffusionPipeline):
 
         text_encoder_output = self.text_encoder(text_input_ids)
 
-        prompt_embeds = text_encoder_output.text_embeds
-        text_encoder_hidden_states = text_encoder_output.last_hidden_state
+        prompt_embeds = text_encoder_output[0]
+        text_encoder_hidden_states = text_encoder_output[1]
 
         prompt_embeds = prompt_embeds.repeat_interleave(num_images_per_prompt, dim=0)
         text_encoder_hidden_states = text_encoder_hidden_states.repeat_interleave(num_images_per_prompt, dim=0)
@@ -347,11 +346,11 @@ class KandinskyPriorPipeline(DiffusionPipeline):
                 truncation=True,
                 return_tensors="np",
             )
-            uncond_text_mask = ms.Tensor(uncond_input.attention_mask.bool())
+            uncond_text_mask = ms.Tensor(uncond_input.attention_mask)
             negative_prompt_embeds_text_encoder_output = self.text_encoder(ms.Tensor(uncond_input.input_ids))
 
-            negative_prompt_embeds = negative_prompt_embeds_text_encoder_output.text_embeds
-            uncond_text_encoder_hidden_states = negative_prompt_embeds_text_encoder_output.last_hidden_state
+            negative_prompt_embeds = negative_prompt_embeds_text_encoder_output[0]
+            uncond_text_encoder_hidden_states = negative_prompt_embeds_text_encoder_output[1]
 
             # duplicate unconditional embeddings for each generation per prompt, using mps friendly method
 
@@ -478,7 +477,7 @@ class KandinskyPriorPipeline(DiffusionPipeline):
                 proj_embedding=prompt_embeds,
                 encoder_hidden_states=text_encoder_hidden_states,
                 attention_mask=text_mask,
-            ).predicted_image_embedding
+            )[0]
 
             if do_classifier_free_guidance:
                 predicted_image_embedding_uncond, predicted_image_embedding_text = predicted_image_embedding.chunk(2)
@@ -510,7 +509,7 @@ class KandinskyPriorPipeline(DiffusionPipeline):
             image_embeddings, zero_embeds = image_embeddings.chunk(2)
 
         if output_type not in ["ms", "np"]:
-            raise ValueError(f"Only the output types `pt` and `np` are supported not output_type={output_type}")
+            raise ValueError(f"Only the output types `ms` and `np` are supported not output_type={output_type}")
 
         if output_type == "np":
             image_embeddings = image_embeddings.numpy()

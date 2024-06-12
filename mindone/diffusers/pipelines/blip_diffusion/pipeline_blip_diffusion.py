@@ -13,35 +13,34 @@
 # limitations under the License.
 from typing import List, Optional, Union
 
+import numpy as np
 import PIL.Image
-import torch
 from transformers import CLIPTokenizer
+
+import mindspore as ms
+from mindspore import nn, ops
 
 from ...models import AutoencoderKL, UNet2DConditionModel
 from ...schedulers import PNDMScheduler
-from ...utils import (
-    logging,
-    replace_example_docstring,
-)
-from ...utils.torch_utils import randn_tensor
+from ...utils import logging, replace_example_docstring
+from ...utils.mindspore_utils import randn_tensor
 from ..pipeline_utils import DiffusionPipeline, ImagePipelineOutput
 from .blip_image_processing import BlipImageProcessor
 from .modeling_blip2 import Blip2QFormerModel
 from .modeling_ctx_clip import ContextCLIPTextModel
-
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 EXAMPLE_DOC_STRING = """
     Examples:
         ```py
-        >>> from diffusers.pipelines import BlipDiffusionPipeline
-        >>> from diffusers.utils import load_image
-        >>> import torch
+        >>> from mindone.diffusers.pipelines import BlipDiffusionPipeline
+        >>> from mindone.diffusers.utils import load_image
+        >>> import mindspore as ms
 
         >>> blip_diffusion_pipe = BlipDiffusionPipeline.from_pretrained(
-        ...     "Salesforce/blipdiffusion", torch_dtype=torch.float16
-        ... ).to("cuda")
+        ...     "Salesforce/blipdiffusion", mindspore_dtype=ms.float16
+        ... )
 
 
         >>> cond_subject = "dog"
@@ -66,7 +65,7 @@ EXAMPLE_DOC_STRING = """
         ...     neg_prompt=negative_prompt,
         ...     height=512,
         ...     width=512,
-        ... ).images
+        ... )[0]
         >>> output[0].save("image.png")
         ```
 """
@@ -97,8 +96,6 @@ class BlipDiffusionPipeline(DiffusionPipeline):
         ctx_begin_pos (int, `optional`, defaults to 2):
             Position of the context token in the text encoder.
     """
-
-    model_cpu_offload_seq = "qformer->text_encoder->unet->vae"
 
     def __init__(
         self,
@@ -140,7 +137,7 @@ class BlipDiffusionPipeline(DiffusionPipeline):
         return rv
 
     # Copied from diffusers.pipelines.consistency_models.pipeline_consistency_models.ConsistencyModelPipeline.prepare_latents
-    def prepare_latents(self, batch_size, num_channels, height, width, dtype, device, generator, latents=None):
+    def prepare_latents(self, batch_size, num_channels, height, width, dtype, generator, latents=None):
         shape = (batch_size, num_channels, height, width)
         if isinstance(generator, list) and len(generator) != batch_size:
             raise ValueError(
@@ -149,17 +146,15 @@ class BlipDiffusionPipeline(DiffusionPipeline):
             )
 
         if latents is None:
-            latents = randn_tensor(shape, generator=generator, device=device, dtype=dtype)
+            latents = randn_tensor(shape, generator=generator, dtype=dtype)
         else:
-            latents = latents.to(device=device, dtype=dtype)
+            latents = latents.to(dtype=dtype)
 
         # scale the initial noise by the standard deviation required by the scheduler
         latents = latents * self.scheduler.init_noise_sigma
         return latents
 
-    def encode_prompt(self, query_embeds, prompt, device=None):
-        device = device or self._execution_device
-
+    def encode_prompt(self, query_embeds, prompt):
         # embeddings for prompt, with query_embeds as context
         max_len = self.text_encoder.text_model.config.max_position_embeddings
         max_len -= self.qformer.config.num_query_tokens
@@ -169,21 +164,20 @@ class BlipDiffusionPipeline(DiffusionPipeline):
             padding="max_length",
             truncation=True,
             max_length=max_len,
-            return_tensors="pt",
-        ).to(device)
+            return_tensors="np",
+        )
 
         batch_size = query_embeds.shape[0]
         ctx_begin_pos = [self.config.ctx_begin_pos] * batch_size
 
         text_embeddings = self.text_encoder(
-            input_ids=tokenized_prompt.input_ids,
+            input_ids=ms.Tensor(tokenized_prompt.input_ids),
             ctx_embeddings=query_embeds,
             ctx_begin_pos=ctx_begin_pos,
         )[0]
 
         return text_embeddings
 
-    @torch.no_grad()
     @replace_example_docstring(EXAMPLE_DOC_STRING)
     def __call__(
         self,
@@ -191,17 +185,17 @@ class BlipDiffusionPipeline(DiffusionPipeline):
         reference_image: PIL.Image.Image,
         source_subject_category: List[str],
         target_subject_category: List[str],
-        latents: Optional[torch.FloatTensor] = None,
+        latents: Optional[ms.Tensor] = None,
         guidance_scale: float = 7.5,
         height: int = 512,
         width: int = 512,
         num_inference_steps: int = 50,
-        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
+        generator: Optional[Union[np.random.Generator, List[np.random.Generator]]] = None,
         neg_prompt: Optional[str] = "",
         prompt_strength: float = 1.0,
         prompt_reps: int = 20,
         output_type: Optional[str] = "pil",
-        return_dict: bool = True,
+        return_dict: bool = False,
     ):
         """
         Function invoked when calling the pipeline for generation.
@@ -215,7 +209,7 @@ class BlipDiffusionPipeline(DiffusionPipeline):
                 The source subject category.
             target_subject_category (`List[str]`):
                 The target subject category.
-            latents (`torch.FloatTensor`, *optional*):
+            latents (`ms.Tensor`, *optional*):
                 Pre-generated noisy latents, sampled from a Gaussian distribution, to be used as inputs for image
                 generation. Can be used to tweak the same generation with different prompts. If not provided, a latents
                 tensor will ge generated by random sampling.
@@ -232,8 +226,8 @@ class BlipDiffusionPipeline(DiffusionPipeline):
             num_inference_steps (`int`, *optional*, defaults to 50):
                 The number of denoising steps. More denoising steps usually lead to a higher quality image at the
                 expense of slower inference.
-            generator (`torch.Generator` or `List[torch.Generator]`, *optional*):
-                One or a list of [torch generator(s)](https://pytorch.org/docs/stable/generated/torch.Generator.html)
+            generator (`np.random.Generator` or `List[np.random.Generator]`, *optional*):
+                One or a list of [np.random.Generator(s)](https://numpy.org/doc/stable/reference/random/generator.html)
                 to make generation deterministic.
             neg_prompt (`str`, *optional*, defaults to ""):
                 The prompt or prompts not to guide the image generation. Ignored when not using guidance (i.e., ignored
@@ -246,19 +240,17 @@ class BlipDiffusionPipeline(DiffusionPipeline):
             output_type (`str`, *optional*, defaults to `"pil"`):
                 The output format of the generate image. Choose between: `"pil"` (`PIL.Image.Image`), `"np"`
                 (`np.array`) or `"pt"` (`torch.Tensor`).
-            return_dict (`bool`, *optional*, defaults to `True`):
+            return_dict (`bool`, *optional*, defaults to `False`):
                 Whether or not to return a [`~pipelines.ImagePipelineOutput`] instead of a plain tuple.
         Examples:
 
         Returns:
             [`~pipelines.ImagePipelineOutput`] or `tuple`
         """
-        device = self._execution_device
-
         reference_image = self.image_processor.preprocess(
-            reference_image, image_mean=self.config.mean, image_std=self.config.std, return_tensors="pt"
+            reference_image, image_mean=self.config.mean, image_std=self.config.std, return_tensors="np"
         )["pixel_values"]
-        reference_image = reference_image.to(device)
+        reference_image = ms.Tensor(reference_image)
 
         if isinstance(prompt, str):
             prompt = [prompt]
@@ -276,7 +268,7 @@ class BlipDiffusionPipeline(DiffusionPipeline):
             prompt_reps=prompt_reps,
         )
         query_embeds = self.get_query_embeddings(reference_image, source_subject_category)
-        text_embeddings = self.encode_prompt(query_embeds, prompt, device)
+        text_embeddings = self.encode_prompt(query_embeds, prompt)
         do_classifier_free_guidance = guidance_scale > 1.0
         if do_classifier_free_guidance:
             max_length = self.text_encoder.text_model.config.max_position_embeddings
@@ -285,16 +277,16 @@ class BlipDiffusionPipeline(DiffusionPipeline):
                 [neg_prompt] * batch_size,
                 padding="max_length",
                 max_length=max_length,
-                return_tensors="pt",
+                return_tensors="np",
             )
             uncond_embeddings = self.text_encoder(
-                input_ids=uncond_input.input_ids.to(device),
+                input_ids=ms.Tensor(uncond_input.input_ids),
                 ctx_embeddings=None,
             )[0]
             # For classifier free guidance, we need to do two forward passes.
             # Here we concatenate the unconditional and text embeddings into a single batch
             # to avoid doing two forward passes
-            text_embeddings = torch.cat([uncond_embeddings, text_embeddings])
+            text_embeddings = ops.cat([uncond_embeddings, text_embeddings])
 
         scale_down_factor = 2 ** (len(self.unet.config.block_out_channels) - 1)
         latents = self.prepare_latents(
@@ -305,7 +297,6 @@ class BlipDiffusionPipeline(DiffusionPipeline):
             generator=generator,
             latents=latents,
             dtype=self.unet.dtype,
-            device=device,
         )
         # set timesteps
         extra_set_kwargs = {}
@@ -315,7 +306,7 @@ class BlipDiffusionPipeline(DiffusionPipeline):
             # expand the latents if we are doing classifier free guidance
             do_classifier_free_guidance = guidance_scale > 1.0
 
-            latent_model_input = torch.cat([latents] * 2) if do_classifier_free_guidance else latents
+            latent_model_input = ops.cat([latents] * 2) if do_classifier_free_guidance else latents
 
             noise_pred = self.unet(
                 latent_model_input,
@@ -323,7 +314,7 @@ class BlipDiffusionPipeline(DiffusionPipeline):
                 encoder_hidden_states=text_embeddings,
                 down_block_additional_residuals=None,
                 mid_block_additional_residual=None,
-            )["sample"]
+            )[0]
 
             # perform guidance
             if do_classifier_free_guidance:
@@ -334,13 +325,10 @@ class BlipDiffusionPipeline(DiffusionPipeline):
                 noise_pred,
                 t,
                 latents,
-            )["prev_sample"]
+            )[0]
 
         image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0]
         image = self.image_processor.postprocess(image, output_type=output_type)
-
-        # Offload all models
-        self.maybe_free_model_hooks()
 
         if not return_dict:
             return (image,)

@@ -19,7 +19,6 @@ import mindspore as ms
 from mindspore import nn, ops
 
 from ...configuration_utils import ConfigMixin, register_to_config
-from ...models.activations import GELU
 from ...models.autoencoders.vae import DecoderOutput, VectorQuantizer
 from ...models.modeling_utils import ModelMixin
 from ...models.normalization import LayerNorm
@@ -43,7 +42,7 @@ class MixingResidualBlock(nn.Cell):
         # channelwise
         self.norm2 = LayerNorm(inp_channels, elementwise_affine=False, eps=1e-6)
         self.channelwise = nn.SequentialCell(
-            nn.Dense(inp_channels, embed_dim), GELU(), nn.Dense(embed_dim, inp_channels)
+            nn.Dense(inp_channels, embed_dim), nn.GELU(), nn.Dense(embed_dim, inp_channels)
         )
 
         self.gammas = ms.Parameter(ops.zeros(6), requires_grad=True)

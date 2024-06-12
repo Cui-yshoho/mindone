@@ -46,7 +46,7 @@ EXAMPLE_DOC_STRING = """
 
         >>> prompt = "an image of a shiba inu, donning a spacesuit and helmet"
         >>> prior_output = pipe(prompt)
-        >>> images = gen_pipe(prior_output.image_embeddings, prompt=prompt)
+        >>> images = gen_pipe(prior_output[0], prompt=prompt)
         ```
 """
 
@@ -162,9 +162,9 @@ class StableCascadeDecoderPipeline(DiffusionPipeline):
             text_encoder_output = self.text_encoder(
                 text_input_ids, attention_mask=attention_mask, output_hidden_states=True
             )
-            prompt_embeds = text_encoder_output.hidden_states[-1]
+            prompt_embeds = text_encoder_output[2][-1]
             if prompt_embeds_pooled is None:
-                prompt_embeds_pooled = text_encoder_output.text_embeds.unsqueeze(1)
+                prompt_embeds_pooled = text_encoder_output[0].unsqueeze(1)
 
         prompt_embeds = prompt_embeds.to(dtype=self.text_encoder.dtype)
         prompt_embeds_pooled = prompt_embeds_pooled.to(dtype=self.text_encoder.dtype)
@@ -204,8 +204,8 @@ class StableCascadeDecoderPipeline(DiffusionPipeline):
                 output_hidden_states=True,
             )
 
-            negative_prompt_embeds = negative_prompt_embeds_text_encoder_output.hidden_states[-1]
-            negative_prompt_embeds_pooled = negative_prompt_embeds_text_encoder_output.text_embeds.unsqueeze(1)
+            negative_prompt_embeds = negative_prompt_embeds_text_encoder_output[2][-1]
+            negative_prompt_embeds_pooled = negative_prompt_embeds_text_encoder_output[0].unsqueeze(1)
 
         if do_classifier_free_guidance:
             # duplicate unconditional embeddings for each generation per prompt, using mps friendly method
@@ -428,7 +428,7 @@ class StableCascadeDecoderPipeline(DiffusionPipeline):
         # 6. Run denoising loop
         self._num_timesteps = len(timesteps[:-1])
         for i, t in enumerate(self.progress_bar(timesteps[:-1])):
-            timestep_ratio = t.broadcast_to(latents.shape[0]).to(dtype)
+            timestep_ratio = t.broadcast_to((latents.shape[0],)).to(dtype)
 
             # 7. Denoise latents
             predicted_latents = self.decoder(
@@ -442,7 +442,11 @@ class StableCascadeDecoderPipeline(DiffusionPipeline):
             # 8. Check for classifier free guidance and apply it
             if self.do_classifier_free_guidance:
                 predicted_latents_text, predicted_latents_uncond = predicted_latents.chunk(2)
-                predicted_latents = ops.lerp(predicted_latents_uncond, predicted_latents_text, self.guidance_scale)
+                predicted_latents = ops.lerp(
+                    predicted_latents_uncond,
+                    predicted_latents_text,
+                    ms.tensor(self.guidance_scale, dtype=predicted_latents_text.dtype),
+                )
 
             # 9. Renoise latents to next timestep
             # TODO: check prev_sample
@@ -472,7 +476,7 @@ class StableCascadeDecoderPipeline(DiffusionPipeline):
             # 10. Scale and decode the image latents with vq-vae
             # TODO: check self.vqgan.decode(latents).sample.clamp(0, 1)
             latents = self.vqgan.config.scale_factor * latents
-            images = self.vqgan.decode(latents).sample.clamp(0, 1)
+            images = self.vqgan.decode(latents)[0].clamp(0, 1)
             if output_type == "np":
                 images = images.permute((0, 2, 3, 1)).float().asnumpy()  # float() as bfloat16-> numpy doesnt work
             elif output_type == "pil":

@@ -46,7 +46,7 @@ EXAMPLE_DOC_STRING = """
         >>> image = load_image("https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/diffusers/svd-docstring-example.jpeg")
         >>> image = image.resize((1024, 576))
 
-        >>> frames = pipe(image, num_frames=25, decode_chunk_size=8).frames[0]
+        >>> frames = pipe(image, num_frames=25, decode_chunk_size=8)[0]
         >>> export_to_video(frames, "generated.mp4", fps=7)
         ```
 """
@@ -159,16 +159,16 @@ class StableVideoDiffusionPipeline(DiffusionPipeline):
 
         # Normalize the image with for CLIP input
         image = self.feature_extractor(
-            images=image,
+            images=image.asnumpy(),
             do_normalize=True,
             do_center_crop=False,
             do_resize=False,
             do_rescale=False,
-            return_tensors="ms",
+            return_tensors="np",
         ).pixel_values
 
-        image = image.to(dtype=dtype)
-        image_embeddings = self.image_encoder(image).image_embeds
+        image = ms.tensor(image).to(dtype=dtype)
+        image_embeddings = self.image_encoder(image)[0]
         image_embeddings = image_embeddings.unsqueeze(1)
 
         # duplicate image embeddings for each generation per prompt, using mps friendly method
@@ -192,7 +192,7 @@ class StableVideoDiffusionPipeline(DiffusionPipeline):
         num_videos_per_prompt: int,
         do_classifier_free_guidance: bool,
     ):
-        image_latents = self.vae.encode(image).latent_dist.mode()
+        image_latents = self.vae.diag_gauss_dist.mode(self.vae.encode(image)[0])
 
         if do_classifier_free_guidance:
             negative_image_latents = ops.zeros_like(image_latents)
@@ -220,7 +220,7 @@ class StableVideoDiffusionPipeline(DiffusionPipeline):
         add_time_ids = [fps, motion_bucket_id, noise_aug_strength]
 
         passed_add_embed_dim = self.unet.config.addition_time_embed_dim * len(add_time_ids)
-        expected_add_embed_dim = self.unet.add_embedding.linear_1.in_features
+        expected_add_embed_dim = self.unet.add_embedding.linear_1.in_channels
 
         if expected_add_embed_dim != passed_add_embed_dim:
             raise ValueError(
@@ -237,11 +237,11 @@ class StableVideoDiffusionPipeline(DiffusionPipeline):
 
     def decode_latents(self, latents: ms.Tensor, num_frames: int, decode_chunk_size: int = 14):
         # [batch, frames, channels, height, width] -> [batch*frames, channels, height, width]
-        latents = latents.flatten(0, 1)
+        latents = latents.flatten(start_dim=0, end_dim=1)
 
         latents = 1 / self.vae.config.scaling_factor * latents
 
-        forward_vae_fn = self.vae.constrcut
+        forward_vae_fn = self.vae.construct
         accepts_num_frames = "num_frames" in set(inspect.signature(forward_vae_fn).parameters.keys())
 
         # decode decode_chunk_size frames at a time to avoid OOM
@@ -253,7 +253,7 @@ class StableVideoDiffusionPipeline(DiffusionPipeline):
                 # we only pass num_frames_in if it's expected
                 decode_kwargs["num_frames"] = num_frames_in
 
-            frame = self.vae.decode(latents[i : i + decode_chunk_size], **decode_kwargs).sample
+            frame = self.vae.decode(latents[i : i + decode_chunk_size], **decode_kwargs)[0]
             frames.append(frame)
         frames = ops.cat(frames, axis=0)
 

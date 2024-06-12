@@ -18,10 +18,10 @@ import math
 import numpy as np
 
 from mindspore import nn, ops
-from mindspore.common.initializer import Constant, Uniform, XavierUniform, initializer
+from mindspore.common.initializer import Constant, Normal, XavierUniform, initializer
 
 from ...configuration_utils import ConfigMixin, register_to_config
-from ...models.activations import GELU, sigmoid
+from ...models.activations import sigmoid
 from ...models.modeling_utils import ModelMixin
 from ...models.normalization import LayerNorm
 from .modeling_wuerstchen_common import AttnBlock, GlobalResponseNorm, TimestepBlock, WuerstchenLayerNorm
@@ -56,7 +56,7 @@ class WuerstchenDiffNeXt(ModelMixin, ConfigMixin):
         self.clip_mapper = nn.Dense(clip_embd, c_cond)
         self.effnet_mappers = nn.CellList(
             [
-                nn.Conv2d(effnet_embd, c_cond, kernel_size=1, has_bias=True, pad_mode="valid") if inject else None
+                nn.Conv2d(effnet_embd, c_cond, kernel_size=1, has_bias=True, pad_mode="valid") if inject else NoneCell()
                 for inject in inject_effnet + list(reversed(inject_effnet))
             ]
         )
@@ -80,9 +80,9 @@ class WuerstchenDiffNeXt(ModelMixin, ConfigMixin):
 
         # BLOCKS
         # -- down blocks
-        down_blocks = nn.CellList()
+        down_blocks = []
         for i in range(len(c_hidden)):
-            down_block = nn.CellList()
+            down_block = []
             if i > 0:
                 down_block.append(
                     nn.SequentialCell(
@@ -96,13 +96,13 @@ class WuerstchenDiffNeXt(ModelMixin, ConfigMixin):
                 for block_type in level_config[i]:
                     c_skip = c_cond if inject_effnet[i] else 0
                     down_block.append(get_block(block_type, c_hidden[i], nhead[i], c_skip=c_skip, dropout=dropout[i]))
-            down_blocks.append(down_block)
-        self.down_blocks = down_blocks
+            down_blocks.append(nn.CellList(down_block))
+        self.down_blocks = nn.CellList(down_blocks)
 
         # -- up blocks
-        up_blocks = nn.CellList()
+        up_blocks = []
         for i in reversed(range(len(c_hidden))):
-            up_block = nn.CellList()
+            up_block = []
             for j in range(blocks[i]):
                 for k, block_type in enumerate(level_config[i]):
                     c_skip = c_hidden[i] if i < len(c_hidden) - 1 and j == k == 0 else 0
@@ -110,15 +110,15 @@ class WuerstchenDiffNeXt(ModelMixin, ConfigMixin):
                     up_block.append(get_block(block_type, c_hidden[i], nhead[i], c_skip=c_skip, dropout=dropout[i]))
             if i > 0:
                 up_block.append(
-                    nn.Sequential(
+                    nn.SequentialCell(
                         WuerstchenLayerNorm(c_hidden[i], elementwise_affine=False, eps=1e-6),
                         nn.Conv2dTranspose(
                             c_hidden[i], c_hidden[i - 1], kernel_size=2, stride=2, has_bias=True, pad_mode="valid"
                         ),
                     )
                 )
-            up_blocks.append(up_block)
-        self.up_blocks = up_blocks
+            up_blocks.append(nn.CellList(up_block))
+        self.up_blocks = nn.CellList(up_blocks)
 
         # OUTPUT
         self.clf = nn.SequentialCell(
@@ -138,7 +138,7 @@ class WuerstchenDiffNeXt(ModelMixin, ConfigMixin):
                 m.bias.set_data(initializer(Constant(0), m.bias.shape, m.bias.dtype))
 
         for mapper in self.effnet_mappers:
-            if mapper is not None:
+            if not isinstance(mapper, NoneCell):
                 mapper.weight.set_data(
                     initializer(Normal(sigma=0.02), mapper.weight.shape, mapper.weight.dtype)
                 )  # conditionings
@@ -153,7 +153,16 @@ class WuerstchenDiffNeXt(ModelMixin, ConfigMixin):
         )  # outputs
 
         # blocks
-        for level_block in self.down_blocks + self.up_blocks:
+        for level_block in self.down_blocks:
+            for block in level_block:
+                if isinstance(block, ResBlockStageB):
+                    block.channelwise[-1].weight *= np.sqrt(1 / sum(self.config.blocks))
+                elif isinstance(block, TimestepBlock):
+                    block.mapper.weight.set_data(
+                        initializer(Constant(0), block.mapper.weight.shape, block.mapper.weight.dtype)
+                    )
+
+        for level_block in self.up_blocks:
             for block in level_block:
                 if isinstance(block, ResBlockStageB):
                     block.channelwise[-1].weight *= np.sqrt(1 / sum(self.config.blocks))
@@ -184,14 +193,14 @@ class WuerstchenDiffNeXt(ModelMixin, ConfigMixin):
             effnet_c = None
             for block in down_block:
                 if isinstance(block, ResBlockStageB):
-                    if effnet_c is None and self.effnet_mappers[i] is not None:
+                    if effnet_c is None and not isinstance(self.effnet_mappers[i], NoneCell):
                         dtype = effnet.dtype
                         effnet_c = self.effnet_mappers[i](
                             ops.interpolate(effnet.float(), size=x.shape[-2:], mode="bicubic", align_corners=True).to(
                                 dtype
                             )
                         )
-                    skip = effnet_c if self.effnet_mappers[i] is not None else None
+                    skip = effnet_c if not isinstance(self.effnet_mappers[i], NoneCell) else None
                     x = block(x, skip)
                 elif isinstance(block, AttnBlock):
                     x = block(x, clip)
@@ -208,12 +217,12 @@ class WuerstchenDiffNeXt(ModelMixin, ConfigMixin):
             effnet_c = None
             for j, block in enumerate(up_block):
                 if isinstance(block, ResBlockStageB):
-                    if effnet_c is None and self.effnet_mappers[len(self.down_blocks) + i] is not None:
+                    if effnet_c is None and not isinstance(self.effnet_mappers[len(self.down_blocks) + i], NoneCell):
                         dtype = effnet.dtype
                         effnet_c = self.effnet_mappers[len(self.down_blocks) + i](
-                            nn.functional.interpolate(
-                                effnet.float(), size=x.shape[-2:], mode="bicubic", antialias=True, align_corners=True
-                            ).to(dtype)
+                            ops.interpolate(effnet.float(), size=x.shape[-2:], mode="bicubic", align_corners=True).to(
+                                dtype
+                            )
                         )
                     skip = level_outputs[i] if j == 0 and i > 0 else None
                     if effnet_c is not None:
@@ -260,7 +269,7 @@ class ResBlockStageB(nn.Cell):
         self.norm = WuerstchenLayerNorm(c, elementwise_affine=False, eps=1e-6)
         self.channelwise = nn.SequentialCell(
             nn.Dense(c + c_skip, c * 4),
-            GELU(),
+            nn.GELU(),
             GlobalResponseNorm(c * 4),
             nn.Dropout(p=dropout),
             nn.Dense(c * 4, c),
@@ -273,3 +282,11 @@ class ResBlockStageB(nn.Cell):
             x = ops.cat([x, x_skip], axis=1)
         x = self.channelwise(x.permute((0, 2, 3, 1))).permute((0, 3, 1, 2))
         return x + x_res
+
+
+class NoneCell(nn.Cell):
+    def __init__(self):
+        super().__init__()
+
+    def construct(self, x):
+        return x
