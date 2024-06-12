@@ -18,7 +18,6 @@ import inspect
 import math
 from typing import Callable, List, Optional, Tuple, Union
 
-# from ...pytorch_utils import apply_chunking_to_forward, find_pruneable_heads_and_indices, prune_linear_layer
 from transformers.models.xlm_roberta.configuration_xlm_roberta import XLMRobertaConfig
 from transformers.utils import logging
 
@@ -26,8 +25,10 @@ import mindspore as ms
 from mindspore import nn, ops
 from mindspore.common.initializer import Normal, One, Zero, initializer
 
-from ...activations_ms import ACT2FN
-from ...modeling_ms_utils import MSPreTrainedModel
+from ...activations import ACT2FN
+from ...mindspore_utils import apply_chunking_to_forward, find_pruneable_heads_and_indices, prune_linear_layer
+from ...modeling_outputs import BaseModelOutputWithPastAndCrossAttentions, BaseModelOutputWithPoolingAndCrossAttentions
+from ...modeling_utils import MSPreTrainedModel
 
 logger = logging.get_logger(__name__)
 
@@ -288,81 +289,18 @@ class XLMRobertaAttention(nn.Cell):
         self.output = XLMRobertaSelfOutput(config)
         self.pruned_heads = []
 
-    def find_pruneable_heads_and_indices(
-        heads: List[int], n_heads: int, head_size: int, already_pruned_heads: List[int]
-    ):
-        """
-        Finds the heads and their indices taking `already_pruned_heads` into account.
-
-        Args:
-            heads (`List[int]`): List of the indices of heads to prune.
-            n_heads (`int`): The number of heads in the model.
-            head_size (`int`): The size of each head.
-            already_pruned_heads (`Set[int]`): A set of already pruned heads.
-
-        Returns:
-            `Tuple[Set[int], Tensor]`: A tuple with the indices of heads to prune taking `already_pruned_heads`
-            into account and the indices of rows/columns to keep in the layer weight.
-        """
-        mask = ops.ones((n_heads, head_size))
-        head_list = []
-        for i in heads:
-            if i not in already_pruned_heads:
-                head_list.append(i)
-        for head in head_list:
-            # Compute how many pruned heads are before the head and move the index accordingly
-            head = head - sum(1 if h < head else 0 for h in already_pruned_heads)
-            mask[head] = 0
-        mask = mask.view(-1).equal(1)
-        index: ms.int64 = ops.arange(len(mask))[mask].long()
-        return head_list, index
-
-    def prune_linear_layer(layer: nn.Dense, index: ms.int64, dim: int = 0) -> nn.Dense:
-        """
-        Prune a linear layer to keep only entries in index.
-
-        Used to remove heads.
-
-        Args:
-            layer (`nn.Dense`): The layer to prune.
-            index (`Tensor`): The indices to keep in the layer.
-            dim (`int`, *optional*, defaults to 0): The dimension on which to keep the indices.
-
-        Returns:
-            `nn.Dense`: The pruned layer as a new layer with `requires_grad=True`.
-        """
-        index = index
-        W = layer.weight.index_select(dim, index).copy()
-        if layer.bias is not None:
-            if dim == 1:
-                b = layer.bias.copy()
-            else:
-                b = layer.bias[index].copy()
-        new_size = list(layer.weight.size())
-        new_size[dim] = len(index)
-        new_layer = nn.Dense(new_size[1], new_size[0], has_bias=layer.bias is not None)
-        new_layer.weight.requires_grad = False
-        new_layer.weight.copy_(W.contiguous())
-        new_layer.weight.requires_grad = True
-        if layer.bias is not None:
-            new_layer.bias.requires_grad = False
-            # new_layer.bias.copy_(b)
-            new_layer.bias = b.copy()
-            new_layer.bias.requires_grad = True
-        return new_layer
-
     def prune_heads(self, heads):
         if len(heads) == 0:
             return
-        heads, index = self.find_pruneable_heads_and_indices(
+        heads, index = find_pruneable_heads_and_indices(
             heads, self.self.num_attention_heads, self.self.attention_head_size, self.pruned_heads
         )
 
         # Prune linear layers
-        self.self.query = self.prune_linear_layer(self.self.query, index)
-        self.self.key = self.prune_linear_layer(self.self.key, index)
-        self.self.value = self.prune_linear_layer(self.self.value, index)
-        self.output.dense = self.prune_linear_layer(self.output.dense, index, dim=1)
+        self.self.query = prune_linear_layer(self.self.query, index)
+        self.self.key = prune_linear_layer(self.self.key, index)
+        self.self.value = prune_linear_layer(self.self.value, index)
+        self.output.dense = prune_linear_layer(self.output.dense, index, dim=1)
 
         # Update hyper params and store pruned heads
         self.self.num_attention_heads = self.self.num_attention_heads - len(heads)
@@ -443,84 +381,6 @@ class XLMRobertaLayer(nn.Cell):
         self.intermediate = XLMRobertaIntermediate(config)
         self.output = XLMRobertaOutput(config)
 
-    def apply_chunking_to_forward(
-        forward_fn: Callable[..., ms.Tensor], chunk_size: int, chunk_dim: int, *input_tensors
-    ) -> ms.Tensor:
-        """
-        This function chunks the `input_tensors` into smaller input tensor parts of size `chunk_size` over the dimension
-        `chunk_dim`. It then applies a layer `forward_fn` to each chunk independently to save memory.
-
-        If the `forward_fn` is independent across the `chunk_dim` this function will yield the same result as directly
-        applying `forward_fn` to `input_tensors`.
-
-        Args:
-            forward_fn (`Callable[..., ms.Tensor]`):
-                The forward function of the model.
-            chunk_size (`int`):
-                The chunk size of a chunked tensor: `num_chunks = len(input_tensors[0]) / chunk_size`.
-            chunk_dim (`int`):
-                The dimension over which the `input_tensors` should be chunked.
-            input_tensors (`Tuple[ms.Tensor]`):
-                The input tensors of `forward_fn` which will be chunked
-
-        Returns:
-            `ms.Tensor`: A tensor with the same shape as the `forward_fn` would have given if applied`.
-
-
-        Examples:
-
-        ```python
-        # rename the usual forward() fn to forward_chunk()
-        def forward_chunk(self, hidden_states):
-            hidden_states = self.decoder(hidden_states)
-            return hidden_states
-
-
-        # implement a chunked forward function
-        def forward(self, hidden_states):
-            return apply_chunking_to_forward(self.forward_chunk, self.chunk_size_lm_head, self.seq_len_dim, hidden_states)
-        ```"""
-
-        assert len(input_tensors) > 0, f"{input_tensors} has to be a tuple/list of tensors"
-
-        # inspect.signature exist since python 3.5 and is a python method -> no problem with backward compatibility
-        num_args_in_forward_chunk_fn = len(inspect.signature(forward_fn).parameters)
-        if num_args_in_forward_chunk_fn != len(input_tensors):
-            raise ValueError(
-                f"forward_chunk_fn expects {num_args_in_forward_chunk_fn} arguments, but only {len(input_tensors)} input "
-                "tensors are given"
-            )
-
-        if chunk_size > 0:
-            tensor_shape = input_tensors[0].shape[chunk_dim]
-            for input_tensor in input_tensors:
-                if input_tensor.shape[chunk_dim] != tensor_shape:
-                    raise ValueError(
-                        f"All input tenors have to be of the same shape: {tensor_shape}, "
-                        f"found shape {input_tensor.shape[chunk_dim]}"
-                    )
-
-            if input_tensors[0].shape[chunk_dim] % chunk_size != 0:
-                raise ValueError(
-                    f"The dimension to be chunked {input_tensors[0].shape[chunk_dim]} has to be a multiple of the chunk "
-                    f"size {chunk_size}"
-                )
-
-            num_chunks = input_tensors[0].shape[chunk_dim] // chunk_size
-
-            # chunk input tensor into tuples
-            input_tensors_chunks = tuple(
-                input_tensor.chunk(num_chunks, axis=chunk_dim) for input_tensor in input_tensors
-            )
-            # apply forward fn to every tuple
-            output_chunks = tuple(
-                forward_fn(*input_tensors_chunk) for input_tensors_chunk in zip(*input_tensors_chunks)
-            )
-            # concatenate output at same dimension
-            return ops.cat(output_chunks, axis=chunk_dim)
-
-        return forward_fn(*input_tensors)
-
     def construct(
         self,
         hidden_states: ms.Tensor,
@@ -575,7 +435,7 @@ class XLMRobertaLayer(nn.Cell):
             cross_attn_present_key_value = cross_attention_outputs[-1]
             present_key_value = present_key_value + cross_attn_present_key_value
 
-        layer_output = self.apply_chunking_to_forward(
+        layer_output = apply_chunking_to_forward(
             self.feed_forward_chunk, self.chunk_size_feed_forward, self.seq_len_dim, attention_output
         )
         outputs = (layer_output,) + outputs
@@ -678,7 +538,13 @@ class XLMRobertaEncoder(nn.Cell):
                 if v is not None
             )
 
-        return hidden_states, next_decoder_cache, all_hidden_states, all_self_attentions, all_cross_attentions
+        return BaseModelOutputWithPastAndCrossAttentions(
+            last_hidden_state=hidden_states,
+            past_key_values=next_decoder_cache,
+            hidden_states=all_hidden_states,
+            attentions=all_self_attentions,
+            cross_attentions=all_cross_attentions,
+        )
 
 
 # Copied from transformers.models.roberta.modeling_roberta.RobertaPooler with Roberta->XLMRoberta
@@ -903,6 +769,15 @@ class XLMRobertaModel(XLMRobertaPreTrainedModel):
 
         if not return_dict:
             return (sequence_output, pooled_output) + encoder_outputs[1:]
+
+        return BaseModelOutputWithPoolingAndCrossAttentions(
+            last_hidden_state=sequence_output,
+            pooler_output=pooled_output,
+            past_key_values=encoder_outputs.past_key_values,
+            hidden_states=encoder_outputs.hidden_states,
+            attentions=encoder_outputs.attentions,
+            cross_attentions=encoder_outputs.cross_attentions,
+        )
 
 
 # Copied from transformers.models.roberta.modeling_roberta.create_position_ids_from_input_ids

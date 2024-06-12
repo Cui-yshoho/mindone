@@ -17,9 +17,6 @@
 from typing import Dict, List, Optional, Union
 
 import numpy as np
-import mindspore as ms
-from mindspore import ops
-
 from transformers.image_processing_utils import BaseImageProcessor, BatchFeature, get_size_dict
 from transformers.image_transforms import convert_to_rgb, resize, to_channel_dimension_format
 from transformers.image_utils import (
@@ -33,10 +30,12 @@ from transformers.image_utils import (
     to_numpy_array,
     valid_images,
 )
-
 from transformers.utils import is_vision_available, logging
-from ...utils import numpy_to_pil
 
+import mindspore as ms
+from mindspore import ops
+
+from ...utils import numpy_to_pil
 
 if is_vision_available():
     import PIL.Image
@@ -245,10 +244,7 @@ class BlipImageProcessor(BaseImageProcessor):
         images = make_list_of_images(images)
 
         if not valid_images(images):
-            raise ValueError(
-                "Invalid image type. Must be of type PIL.Image.Image, numpy.ndarray, "
-                "ms.Tensor"
-            )
+            raise ValueError("Invalid image type. Must be of type PIL.Image.Image, numpy.ndarray, " "ms.Tensor")
 
         if do_resize and size is None or resample is None:
             raise ValueError("Size and resample must be specified if do_resize is True.")
@@ -283,8 +279,7 @@ class BlipImageProcessor(BaseImageProcessor):
 
         if do_rescale:
             images = [
-                self.rescale(image=image, scale=rescale_factor, input_data_format=input_data_format)
-                for image in images
+                self.rescale(image=image, scale=rescale_factor, input_data_format=input_data_format) for image in images
             ]
         if do_normalize:
             images = [

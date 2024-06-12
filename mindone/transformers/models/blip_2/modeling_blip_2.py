@@ -18,23 +18,9 @@ import math
 from dataclasses import dataclass
 from typing import Any, Optional, Tuple, Union
 
-# import torch
-# import torch.utils.checkpoint
-# from torch import nn
-# from torch.nn import CrossEntropyLoss
-import mindspore as ms
-from mindspore import ops, nn
-from mindspore.common.initializer import initializer, Normal, Zero, One, TruncatedNormal
+# from transformers.models.auto import AutoModelForCausalLM, AutoModelForSeq2SeqLM
+from transformers.models.blip_2.configuration_blip_2 import Blip2Config, Blip2QFormerConfig, Blip2VisionConfig
 
-from ...activations_ms import ACT2FN
-# from ...modeling_outputs import (
-#     BaseModelOutput,
-#     BaseModelOutputWithPastAndCrossAttentions,
-#     BaseModelOutputWithPooling,
-#     BaseModelOutputWithPoolingAndCrossAttentions,
-# )
-from ...modeling_ms_utils import MSPreTrainedModel
-# from ...pytorch_utils import apply_chunking_to_forward, find_pruneable_heads_and_indices, prune_linear_layer
 # from ...utils import (
 #     ModelOutput,
 #     add_start_docstrings,
@@ -42,47 +28,62 @@ from ...modeling_ms_utils import MSPreTrainedModel
 #     logging,
 #     replace_return_docstrings,
 # )
-from transformers.utils import logging
-# from transformers.models.auto import AutoModelForCausalLM, AutoModelForSeq2SeqLM
-from transformers.models.blip_2.configuration_blip_2 import Blip2Config, Blip2QFormerConfig, Blip2VisionConfig
+from transformers.utils import ModelOutput, logging
 
+# import torch
+# import torch.utils.checkpoint
+# from torch import nn
+# from torch.nn import CrossEntropyLoss
+import mindspore as ms
+from mindspore import nn, ops
+from mindspore.common.initializer import Normal, One, TruncatedNormal, Zero, initializer
+
+from ...activations import ACT2FN
+from ...mindspore_utils import apply_chunking_to_forward, find_pruneable_heads_and_indices, prune_linear_layer
+from ...modeling_outputs import (
+    BaseModelOutput,
+    BaseModelOutputWithPastAndCrossAttentions,
+    BaseModelOutputWithPooling,
+    BaseModelOutputWithPoolingAndCrossAttentions,
+)
+from ...modeling_utils import MSPreTrainedModel
 
 logger = logging.get_logger(__name__)
 
 _CHECKPOINT_FOR_DOC = "Salesforce/blip2-opt-2.7b"
 
 
-# @dataclass
-# class Blip2ForConditionalGenerationModelOutput(ModelOutput):
-#     """
-#     Class defining the outputs of [`Blip2ForConditionalGeneration`].
+@dataclass
+class Blip2ForConditionalGenerationModelOutput(ModelOutput):
+    """
+    Class defining the outputs of [`Blip2ForConditionalGeneration`].
 
-#     Args:
-#         loss (`ms.Tensor`, *optional*, returned when `labels` is provided, `ms.Tensor` of shape `(1,)`):
-#             Language modeling loss from the language model.
-#         logits (`ms.Tensor` of shape `(batch_size, sequence_length, config.vocab_size)`):
-#             Prediction scores of the language modeling head of the language model.
-#         vision_outputs (`BaseModelOutputWithPooling`):
-#             Outputs of the vision encoder.
-#         qformer_outputs (`BaseModelOutputWithPoolingAndCrossAttentions`):
-#             Outputs of the Q-Former (Querying Transformer).
-#         language_model_outputs (`CausalLMOutputWithPast` or `Seq2SeqLMOutput`):
-#             Outputs of the language model.
-#     """
+    Args:
+        loss (`ms.Tensor`, *optional*, returned when `labels` is provided, `ms.Tensor` of shape `(1,)`):
+            Language modeling loss from the language model.
+        logits (`ms.Tensor` of shape `(batch_size, sequence_length, config.vocab_size)`):
+            Prediction scores of the language modeling head of the language model.
+        vision_outputs (`BaseModelOutputWithPooling`):
+            Outputs of the vision encoder.
+        qformer_outputs (`BaseModelOutputWithPoolingAndCrossAttentions`):
+            Outputs of the Q-Former (Querying Transformer).
+        language_model_outputs (`CausalLMOutputWithPast` or `Seq2SeqLMOutput`):
+            Outputs of the language model.
+    """
 
-#     loss: Optional[Tuple[ms.Tensor]] = None
-#     logits: Optional[Tuple[ms.Tensor]] = None
-#     vision_outputs: Optional[ms.Tensor] = None
-#     qformer_outputs: Optional[Tuple[ms.Tensor]] = None
-#     language_model_outputs: Optional[Tuple[ms.Tensor]] = None
+    loss: Optional[Tuple[ms.Tensor]] = None
+    logits: Optional[Tuple[ms.Tensor]] = None
+    vision_outputs: Optional[ms.Tensor] = None
+    qformer_outputs: Optional[Tuple[ms.Tensor]] = None
+    language_model_outputs: Optional[Tuple[ms.Tensor]] = None
 
-#     def to_tuple(self) -> Tuple[Any]:
-#         return tuple(
-#             self[k]
-#             if k not in ["vision_outputs", "qformer_outputs", "language_model_outputs"]
-#             else getattr(self, k).to_tuple()
-#             for k in self.keys()
-#         )
+    def to_tuple(self) -> Tuple[Any]:
+        return tuple(
+            self[k]
+            if k not in ["vision_outputs", "qformer_outputs", "language_model_outputs"]
+            else getattr(self, k).to_tuple()
+            for k in self.keys()
+        )
 
 
 # Copied from transformers.models.blip.modeling_blip.BlipVisionEmbeddings with Blip->Blip2
@@ -97,13 +98,20 @@ class Blip2VisionEmbeddings(nn.Cell):
         self.class_embedding = ms.Parameter(ops.randn((1, 1, self.embed_dim)), name="class_embedding")
 
         self.patch_embedding = nn.Conv2d(
-            in_channels=3, out_channels=self.embed_dim, kernel_size=self.patch_size, stride=self.patch_size, has_bias=True, pad_mode="valid",
+            in_channels=3,
+            out_channels=self.embed_dim,
+            kernel_size=self.patch_size,
+            stride=self.patch_size,
+            has_bias=True,
+            pad_mode="valid",
         )
 
         self.num_patches = (self.image_size // self.patch_size) ** 2
         self.num_positions = self.num_patches + 1
 
-        self.position_embedding = ms.Parameter(ops.randn((1, self.num_positions, self.embed_dim)), name="position_embedding")
+        self.position_embedding = ms.Parameter(
+            ops.randn((1, self.num_positions, self.embed_dim)), name="position_embedding"
+        )
 
     def interpolate_pos_encoding(self, embeddings: ms.Tensor, height: int, width: int) -> ms.Tensor:
         """
@@ -127,7 +135,9 @@ class Blip2VisionEmbeddings(nn.Cell):
         # we add a small number to avoid floating point error in the interpolation
         # see discussion at https://github.com/facebookresearch/dino/issues/8
         h0, w0 = h0 + 0.1, w0 + 0.1
-        patch_pos_embed = patch_pos_embed.reshape((1, int(math.sqrt(num_positions)), int(math.sqrt(num_positions)), dim))
+        patch_pos_embed = patch_pos_embed.reshape(
+            (1, int(math.sqrt(num_positions)), int(math.sqrt(num_positions)), dim)
+        )
         patch_pos_embed = patch_pos_embed.permute((0, 3, 1, 2))
         # TODO: the calculation method is the same as TensorFlow, and the results are different from PyTorch
         patch_pos_embed = ops.interpolate(
@@ -317,15 +327,29 @@ class Blip2PreTrainedModel(MSPreTrainedModel):
         """Initialize the weights"""
         factor = self.config.initializer_range
         if isinstance(module, nn.Conv2d) or isinstance(module, nn.Embedding) or isinstance(module, nn.Linear):
-            module.weight.set_data(initializer(Normal(mean=0.0, sigma=factor), shape=module.weight.shape, dtype=module.weight.dtype))
+            module.weight.set_data(
+                initializer(Normal(mean=0.0, sigma=factor), shape=module.weight.shape, dtype=module.weight.dtype)
+            )
             if hasattr(module, "bias") and module.bias is not None:
                 module.bias.set_data(initializer(Zero(), shape=module.bias.shape, dtype=module.bias.dtype))
 
         if isinstance(module, Blip2VisionEmbeddings):
             if hasattr(self.config, "vision_config"):
                 factor = self.config.vision_config.initializer_range
-            module.position_embedding.set_data(initializer(TruncatedNormal(mean=0.0, sigma=factor), shape=module.position_embedding.shape, dtype=module.position_embedding.dtype))
-            module.class_embedding.set_data(initializer(TruncatedNormal(mean=0.0, sigma=factor), shape=module.class_embedding.shape, dtype=module.class_embedding.dtype))
+            module.position_embedding.set_data(
+                initializer(
+                    TruncatedNormal(mean=0.0, sigma=factor),
+                    shape=module.position_embedding.shape,
+                    dtype=module.position_embedding.dtype,
+                )
+            )
+            module.class_embedding.set_data(
+                initializer(
+                    TruncatedNormal(mean=0.0, sigma=factor),
+                    shape=module.class_embedding.shape,
+                    dtype=module.class_embedding.dtype,
+                )
+            )
 
         elif isinstance(module, nn.LayerNorm):
             module.bias.set_data(initializer(Zero(), shape=module.bias.shape, dtype=module.bias.dtype))
@@ -417,9 +441,7 @@ class Blip2Encoder(nn.Cell):
 
         if not return_dict:
             return tuple(v for v in [hidden_states, encoder_states, all_attentions] if v is not None)
-        return BaseModelOutput(
-            last_hidden_state=hidden_states, hidden_states=encoder_states, attentions=all_attentions
-        )
+        return BaseModelOutput(last_hidden_state=hidden_states, hidden_states=encoder_states, attentions=all_attentions)
 
 
 # Copied from transformers.models.blip.modeling_blip.BlipVisionModel with Blip->Blip2, BLIP->BLIP_2
@@ -1762,9 +1784,7 @@ class Blip2ForConditionalGeneration(Blip2PreTrainedModel):
         )
         if input_ids is None:
             input_ids = (
-                ms.Tensor([[self.config.text_config.bos_token_id]])
-                .repeat(batch_size, 1)
-                .to(image_embeds.device)
+                ms.Tensor([[self.config.text_config.bos_token_id]]).repeat(batch_size, 1).to(image_embeds.device)
             )
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids)
@@ -1791,9 +1811,7 @@ class Blip2ForConditionalGeneration(Blip2PreTrainedModel):
         # have BOS as the first token, even though under the hood we are calling LM with embeds
         if not self.language_model.config.is_encoder_decoder:
             bos_tokens = (
-                ms.Tensor([[self.config.text_config.bos_token_id]])
-                .repeat(batch_size, 1)
-                .to(image_embeds.device)
+                ms.Tensor([[self.config.text_config.bos_token_id]]).repeat(batch_size, 1).to(image_embeds.device)
             )
             if not isinstance(outputs, ms.Tensor):
                 outputs.sequences = torch.cat([bos_tokens, outputs.sequences], dim=-1)

@@ -1,9 +1,8 @@
-model_version: v1.1
 ckpt_path: "models/opensora_v1.1_stage3.ckpt"
 t5_model_dir: "models/t5-v1_1-xxl/"
 vae_checkpoint: "models/sd-vae-ft-ema.ckpt"
 
-image_size: [ 240, 426 ]
+image_size: [240, 426]
 num_frames: 16
 frame_interval: 3
 fps: 24
@@ -26,7 +25,5 @@ captions:
   - "In an ornate, historical hall, a massive tidal wave peaks and begins to crash. Two surfers, seizing the moment, skillfully navigate the face of the wave."
 
 mask_strategy:
-  - "0"
 
 reference_path:
-  - "assets/wave.png"

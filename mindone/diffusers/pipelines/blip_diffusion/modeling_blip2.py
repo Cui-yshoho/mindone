@@ -13,19 +13,23 @@
 # limitations under the License.
 from typing import Optional, Tuple, Union
 
+from transformers import BertTokenizer
+from transformers.modeling_outputs import (
+    BaseModelOutputWithPastAndCrossAttentions,
+    BaseModelOutputWithPooling,
+    BaseModelOutputWithPoolingAndCrossAttentions,
+)
+from transformers.models.blip_2.configuration_blip_2 import Blip2Config, Blip2VisionConfig
+from transformers.pytorch_utils import apply_chunking_to_forward
+from transformers.utils import logging, replace_return_docstrings
+
 # import torch
 # import torch.utils.checkpoint
 # from torch import nn
 import mindspore as ms
 from mindspore import nn, ops
-from transformers import BertTokenizer
-from mindone.transformers.activations_ms import QuickGELUActivation as QuickGELU
-# from transformers.modeling_outputs import (
-#     BaseModelOutputWithPastAndCrossAttentions,
-#     BaseModelOutputWithPooling,
-#     BaseModelOutputWithPoolingAndCrossAttentions,
-# )
-from transformers.models.blip_2.configuration_blip_2 import Blip2Config, Blip2VisionConfig
+
+from mindone.transformers.activations import QuickGELUActivation as QuickGELU
 from mindone.transformers.models.blip_2.modeling_blip_2 import (
     Blip2Encoder,
     Blip2PreTrainedModel,
@@ -33,12 +37,6 @@ from mindone.transformers.models.blip_2.modeling_blip_2 import (
     Blip2QFormerIntermediate,
     Blip2QFormerOutput,
 )
-from transformers.pytorch_utils import apply_chunking_to_forward
-from transformers.utils import (
-    logging,
-    replace_return_docstrings,
-)
-
 
 logger = logging.get_logger(__name__)
 
