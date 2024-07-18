@@ -998,3 +998,242 @@ class MultiIPAdapterImageProjection(nn.Cell):
             projected_image_embeds.append(image_embed)
 
         return projected_image_embeds
+
+
+class HunyuanDiTAttentionPool(nn.Cell):
+    # Copied from https://github.com/Tencent/HunyuanDiT/blob/cb709308d92e6c7e8d59d0dff41b74d35088db6a/hydit/modules/poolers.py#L6
+
+    def __init__(self, spacial_dim: int, embed_dim: int, num_heads: int, output_dim: int = None):
+        super().__init__()
+        self.positional_embedding = ms.Parameter(
+            ops.randn((spacial_dim + 1, embed_dim)) / embed_dim**0.5, name="positional_embedding"
+        )
+        self.k_proj = nn.Dense(embed_dim, embed_dim)
+        self.q_proj = nn.Dense(embed_dim, embed_dim)
+        self.v_proj = nn.Dense(embed_dim, embed_dim)
+        self.c_proj = nn.Dense(embed_dim, output_dim or embed_dim)
+        self.num_heads = num_heads
+
+    def construct(self, x):
+        x = x.permute(1, 0, 2)  # NLC -> LNC
+        x = ops.cat([x.mean(axis=0, keep_dims=True), x], axis=0)  # (L+1)NC
+        x = x + self.positional_embedding[:, None, :].to(x.dtype)  # (L+1)NC
+        x, _ = F.multi_head_attention_forward(
+            query=x[:1],
+            key=x,
+            value=x,
+            embed_dim_to_check=x.shape[-1],
+            num_heads=self.num_heads,
+            q_proj_weight=self.q_proj.weight,
+            k_proj_weight=self.k_proj.weight,
+            v_proj_weight=self.v_proj.weight,
+            in_proj_weight=None,
+            in_proj_bias=ops.cat([self.q_proj.bias, self.k_proj.bias, self.v_proj.bias]),
+            bias_k=None,
+            bias_v=None,
+            add_zero_attn=False,
+            dropout_p=0,
+            out_proj_weight=self.c_proj.weight,
+            out_proj_bias=self.c_proj.bias,
+            use_separate_proj_weight=True,
+            training=self.training,
+            need_weights=False,
+        )
+        return x.squeeze(0)
+
+
+class HunyuanCombinedTimestepTextSizeStyleEmbedding(nn.Cell):
+    def __init__(
+        self,
+        embedding_dim,
+        pooled_projection_dim=1024,
+        seq_len=256,
+        cross_attention_dim=2048,
+        use_style_cond_and_image_meta_size=True,
+    ):
+        super().__init__()
+
+        self.time_proj = Timesteps(num_channels=256, flip_sin_to_cos=True, downscale_freq_shift=0)
+        self.timestep_embedder = TimestepEmbedding(in_channels=256, time_embed_dim=embedding_dim)
+
+        self.size_proj = Timesteps(num_channels=256, flip_sin_to_cos=True, downscale_freq_shift=0)
+
+        self.pooler = HunyuanDiTAttentionPool(
+            seq_len, cross_attention_dim, num_heads=8, output_dim=pooled_projection_dim
+        )
+
+        # Here we use a default learned embedder layer for future extension.
+        self.use_style_cond_and_image_meta_size = use_style_cond_and_image_meta_size
+        if use_style_cond_and_image_meta_size:
+            self.style_embedder = nn.Embedding(1, embedding_dim)
+            extra_in_dim = 256 * 6 + embedding_dim + pooled_projection_dim
+        else:
+            extra_in_dim = pooled_projection_dim
+
+        self.extra_embedder = PixArtAlphaTextProjection(
+            in_features=extra_in_dim,
+            hidden_size=embedding_dim * 4,
+            out_features=embedding_dim,
+            act_fn="silu_fp32",
+        )
+
+    def construct(self, timestep, encoder_hidden_states, image_meta_size, style, hidden_dtype=None):
+        timesteps_proj = self.time_proj(timestep)
+        timesteps_emb = self.timestep_embedder(timesteps_proj.to(dtype=hidden_dtype))  # (N, 256)
+
+        # extra condition1: text
+        pooled_projections = self.pooler(encoder_hidden_states)  # (N, 1024)
+
+        if self.use_style_cond_and_image_meta_size:
+            # extra condition2: image meta size embdding
+            image_meta_size = self.size_proj(image_meta_size.view(-1))
+            image_meta_size = image_meta_size.to(dtype=hidden_dtype)
+            image_meta_size = image_meta_size.view(-1, 6 * 256)  # (N, 1536)
+
+            # extra condition3: style embedding
+            style_embedding = self.style_embedder(style)  # (N, embedding_dim)
+
+            # Concatenate all extra vectors
+            extra_cond = ops.cat([pooled_projections, image_meta_size, style_embedding], axis=1)
+        else:
+            extra_cond = ops.cat([pooled_projections], axis=1)
+
+        conditioning = timesteps_emb + self.extra_embedder(extra_cond)  # [B, D]
+
+        return conditioning
+
+
+def get_2d_rotary_pos_embed(embed_dim, crops_coords, grid_size, use_real=True):
+    """
+    RoPE for image tokens with 2d structure.
+
+    Args:
+    embed_dim: (`int`):
+        The embedding dimension size
+    crops_coords (`Tuple[int]`)
+        The top-left and bottom-right coordinates of the crop.
+    grid_size (`Tuple[int]`):
+        The grid size of the positional embedding.
+    use_real (`bool`):
+        If True, return real part and imaginary part separately. Otherwise, return complex numbers.
+
+    Returns:
+        `ms.Tensor`: positional embdding with shape `( grid_size * grid_size, embed_dim/2)`.
+    """
+    start, stop = crops_coords
+    grid_h = np.linspace(start[0], stop[0], grid_size[0], endpoint=False, dtype=np.float32)
+    grid_w = np.linspace(start[1], stop[1], grid_size[1], endpoint=False, dtype=np.float32)
+    grid = np.meshgrid(grid_w, grid_h)  # here w goes first
+    grid = np.stack(grid, axis=0)  # [2, W, H]
+
+    grid = grid.reshape([2, 1, *grid.shape[1:]])
+    pos_embed = get_2d_rotary_pos_embed_from_grid(embed_dim, grid, use_real=use_real)
+    return pos_embed
+
+
+def get_2d_rotary_pos_embed_from_grid(embed_dim, grid, use_real=False):
+    assert embed_dim % 4 == 0
+
+    # use half of dimensions to encode grid_h
+    emb_h = get_1d_rotary_pos_embed(embed_dim // 2, grid[0].reshape(-1), use_real=use_real)  # (H*W, D/4)
+    emb_w = get_1d_rotary_pos_embed(embed_dim // 2, grid[1].reshape(-1), use_real=use_real)  # (H*W, D/4)
+
+    if use_real:
+        cos = ops.cat([emb_h[0], emb_w[0]], axis=1)  # (H*W, D/2)
+        sin = ops.cat([emb_h[1], emb_w[1]], axis=1)  # (H*W, D/2)
+        return cos, sin
+    else:
+        emb = ops.cat([emb_h, emb_w], axis=1)  # (H*W, D/2)
+        return emb
+
+
+def get_2d_rotary_pos_embed_lumina(embed_dim, len_h, len_w, linear_factor=1.0, ntk_factor=1.0):
+    assert embed_dim % 4 == 0
+
+    emb_h = get_1d_rotary_pos_embed(
+        embed_dim // 2, len_h, linear_factor=linear_factor, ntk_factor=ntk_factor
+    )  # (H, D/4)
+    emb_w = get_1d_rotary_pos_embed(
+        embed_dim // 2, len_w, linear_factor=linear_factor, ntk_factor=ntk_factor
+    )  # (W, D/4)
+    emb_h = emb_h.view(len_h, 1, embed_dim // 4, 1).repeat(1, len_w, 1, 1)  # (H, W, D/4, 1)
+    emb_w = emb_w.view(1, len_w, embed_dim // 4, 1).repeat(len_h, 1, 1, 1)  # (H, W, D/4, 1)
+
+    emb = ops.cat([emb_h, emb_w], axis=-1).flatten(start_dim=2)  # (H, W, D/2)
+    return emb
+
+
+def get_1d_rotary_pos_embed(
+    dim: int, pos: Union[np.ndarray, int], theta: float = 10000.0, use_real=False, linear_factor=1.0, ntk_factor=1.0
+):
+    """
+    Precompute the frequency tensor for complex exponentials (cis) with given dimensions.
+
+    This function calculates a frequency tensor with complex exponentials using the given dimension 'dim' and the end
+    index 'end'. The 'theta' parameter scales the frequencies. The returned tensor contains complex values in complex64
+    data type.
+
+    Args:
+        dim (`int`): Dimension of the frequency tensor.
+        pos (`np.ndarray` or `int`): Position indices for the frequency tensor. [S] or scalar
+        theta (`float`, *optional*, defaults to 10000.0):
+            Scaling factor for frequency computation. Defaults to 10000.0.
+        use_real (`bool`, *optional*):
+            If True, return real part and imaginary part separately. Otherwise, return complex numbers.
+        linear_factor (`float`, *optional*, defaults to 1.0):
+            Scaling factor for the context extrapolation. Defaults to 1.0.
+        ntk_factor (`float`, *optional*, defaults to 1.0):
+            Scaling factor for the NTK-Aware RoPE. Defaults to 1.0.
+    Returns:
+        `ms.Tensor`: Precomputed frequency tensor with complex exponentials. [S, D/2]
+    """
+    if isinstance(pos, int):
+        pos = np.arange(pos)
+    theta = theta * ntk_factor
+    freqs = 1.0 / (theta ** (ops.arange(0, dim, 2)[: (dim // 2)].float() / dim)) / linear_factor  # [D/2]
+    t = ms.Tensor.from_numpy(pos)  # type: ignore  # [S]
+    freqs = ops.outer(t, freqs).float()  # type: ignore   # [S, D/2]
+    if use_real:
+        freqs_cos = freqs.cos().repeat_interleave(2, dim=1)  # [S, D]
+        freqs_sin = freqs.sin().repeat_interleave(2, dim=1)  # [S, D]
+        return freqs_cos, freqs_sin
+    else:
+        freqs_cis = ops.polar(ops.ones_like(freqs), freqs)  # complex64     # [S, D/2]
+        return freqs_cis
+
+
+def apply_rotary_emb(
+    x: ms.Tensor,
+    freqs_cis: Union[ms.Tensor, Tuple[ms.Tensor]],
+    use_real: bool = True,
+) -> Tuple[ms.Tensor, ms.Tensor]:
+    """
+    Apply rotary embeddings to input tensors using the given frequency tensor. This function applies rotary embeddings
+    to the given query or key 'x' tensors using the provided frequency tensor 'freqs_cis'. The input tensors are
+    reshaped as complex numbers, and the frequency tensor is reshaped for broadcasting compatibility. The resulting
+    tensors contain rotary embeddings and are returned as real tensors.
+
+    Args:
+        x (`ms.Tensor`):
+            Query or key tensor to apply rotary embeddings. [B, H, S, D] xk (ms.Tensor): Key tensor to apply
+        freqs_cis (`Tuple[ms.Tensor]`): Precomputed frequency tensor for complex exponentials. ([S, D], [S, D],)
+
+    Returns:
+        Tuple[ms.Tensor, ms.Tensor]: Tuple of modified query tensor and key tensor with rotary embeddings.
+    """
+    if use_real:
+        cos, sin = freqs_cis  # [S, D]
+        cos = cos[None, None]
+        sin = sin[None, None]
+
+        x_real, x_imag = x.reshape(*x.shape[:-1], -1, 2).unbind(-1)  # [B, S, H, D//2]
+        x_rotated = ops.stack([-x_imag, x_real], axis=-1).flatten(start_dim=3)
+        out = (x.float() * cos + x_rotated.float() * sin).to(x.dtype)
+
+        return out
+    else:
+        x_rotated = ops.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))
+        freqs_cis = freqs_cis.unsqueeze(2)
+        x_out = ops.view_as_real(x_rotated * freqs_cis).flatten(3)
+
+        return x_out.type_as(x)

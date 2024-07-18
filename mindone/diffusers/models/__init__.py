@@ -32,6 +32,7 @@ _import_structure = {
     "transformers.transformer_2d": ["Transformer2DModel"],
     "transformers.transformer_temporal": ["TransformerTemporalModel"],
     "transformers.transformer_sd3": ["SD3Transformer2DModel"],
+    "transformers.hunyuan_transformer_2d": ["HunyuanDiT2DModel"],
     "unets.unet_1d": ["UNet1DModel"],
     "unets.unet_2d": ["UNet2DModel"],
     "unets.unet_2d_condition": ["UNet2DConditionModel"],
@@ -59,6 +60,7 @@ if TYPE_CHECKING:
     from .modeling_utils import ModelMixin
     from .transformers import (
         DualTransformer2DModel,
+        HunyuanDiT2DModel,
         PriorTransformer,
         SD3Transformer2DModel,
         T5FilmDecoder,

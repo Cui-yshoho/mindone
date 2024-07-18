@@ -1,4 +1,18 @@
 from .modeling_utils import MSPreTrainedModel
+from .models.bert import (
+    BertForMaskedLM,
+    BertForMultipleChoice,
+    BertForNextSentencePrediction,
+    BertForPreTraining,
+    BertForQuestionAnswering,
+    BertForSequenceClassification,
+    BertForTokenClassification,
+    BertLayer,
+    BertLMHeadModel,
+    BertModel,
+    BertPreTrainedModel,
+    load_tf_weights_in_bert,
+)
 from .models.clip import (
     CLIP_PRETRAINED_MODEL_ARCHIVE_LIST,
     CLIPModel,

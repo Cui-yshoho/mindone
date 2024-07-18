@@ -1,1 +1,1 @@
-from . import clip, t5
+from . import bert, clip, t5
