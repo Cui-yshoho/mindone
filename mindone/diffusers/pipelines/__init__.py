@@ -6,6 +6,12 @@ from ..utils import _LazyModule
 _import_structure = {
     "ddim": ["DDIMPipeline"],
     "ddpm": ["DDPMPipeline"],
+    "kolors": [
+        "KolorsPipeline",
+        "KolorsImg2ImgPipeline",
+        "ChatGLMModel",
+        "ChatGLMTokenizer",
+    ],
     "stable_diffusion": [
         "StableDiffusionPipeline",
         "StableDiffusionImg2ImgPipeline",
@@ -27,6 +33,7 @@ _import_structure = {
 if TYPE_CHECKING:
     from .ddim import DDIMPipeline
     from .ddpm import DDPMPipeline
+    from .kolors import ChatGLMModel, ChatGLMTokenizer, KolorsImg2ImgPipeline, KolorsPipeline
     from .pipeline_utils import DiffusionPipeline, ImagePipelineOutput
     from .stable_diffusion import StableDiffusionImg2ImgPipeline, StableDiffusionPipeline
     from .stable_diffusion_3 import StableDiffusion3Pipeline

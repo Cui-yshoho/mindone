@@ -50,9 +50,13 @@ _import_structure = {
         "get_scheduler",
     ],
     "pipelines": [
+        "ChatGLMModel",
+        "ChatGLMTokenizer",
         "DDIMPipeline",
         "DDPMPipeline",
         "DiffusionPipeline",
+        "KolorsImg2ImgPipeline",
+        "KolorsPipeline",
         "StableDiffusion3Pipeline",
         "StableDiffusionPipeline",
         "StableDiffusionXLPipeline",
@@ -134,9 +138,13 @@ if TYPE_CHECKING:
         get_scheduler,
     )
     from .pipelines import (
+        ChatGLMModel,
+        ChatGLMTokenizer,
         DDIMPipeline,
         DDPMPipeline,
         DiffusionPipeline,
+        KolorsImg2ImgPipeline,
+        KolorsPipeline,
         StableDiffusion3Pipeline,
         StableDiffusionImg2ImgPipeline,
         StableDiffusionPipeline,
