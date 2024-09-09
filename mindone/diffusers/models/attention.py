@@ -349,7 +349,10 @@ class BasicTransformerBlock(nn.Cell):
                 out_bias=attention_out_bias,
             )  # is self-attn if encoder_hidden_states is none
         else:
-            self.norm2 = None
+            if norm_type == "ada_norm_single":  # For Latte
+                self.norm2 = LayerNorm(dim, norm_eps, norm_elementwise_affine)
+            else:
+                self.norm2 = None
             self.attn2 = None
 
         # 3. Feed-forward
@@ -427,10 +430,6 @@ class BasicTransformerBlock(nn.Cell):
             ).chunk(6, axis=1)
             norm_hidden_states = self.norm1(hidden_states)
             norm_hidden_states = norm_hidden_states * (1 + scale_msa) + shift_msa
-            # Only squeeze axis when it's dim equals to 1. It's different from torch because torch does
-            # nothing when squeezed axis has more than 1 dim but mindspore raised error.
-            if norm_hidden_states.shape[1] == 1:
-                norm_hidden_states = norm_hidden_states.squeeze(1)
         else:
             raise ValueError("Incorrect norm used")
 

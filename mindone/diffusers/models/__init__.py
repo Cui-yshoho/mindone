@@ -27,6 +27,7 @@ _import_structure = {
     "dual_transformer_2d": ["DualTransformer2DModel"],
     "embeddings": ["ImageProjection"],
     "modeling_utils": ["ModelMixin"],
+    "transformers.latte_transformer_3d": ["LatteTransformer3DModel"],
     "transformers.prior_transformer": ["PriorTransformer"],
     "transformers.t5_film_transformer": ["T5FilmDecoder"],
     "transformers.transformer_2d": ["Transformer2DModel"],
@@ -59,6 +60,7 @@ if TYPE_CHECKING:
     from .modeling_utils import ModelMixin
     from .transformers import (
         DualTransformer2DModel,
+        LatteTransformer3DModel,
         PriorTransformer,
         SD3Transformer2DModel,
         T5FilmDecoder,

@@ -33,6 +33,7 @@ _import_structure = {
     "dit": ["DiTPipeline"],
     "i2vgen_xl": ["I2VGenXLPipeline"],
     "latent_diffusion": ["LDMSuperResolutionPipeline", "LDMTextToImagePipeline"],
+    "latte": ["LattePipeline"],
     "kandinsky": [
         "KandinskyCombinedPipeline",
         "KandinskyImg2ImgCombinedPipeline",
@@ -57,6 +58,10 @@ _import_structure = {
     "kandinsky3": [
         "Kandinsky3Img2ImgPipeline",
         "Kandinsky3Pipeline",
+    ],
+    "kolors": [
+        "KolorsPipeline",
+        "KolorsImg2ImgPipeline",
     ],
     "latent_consistency_models": [
         "LatentConsistencyModelImg2ImgPipeline",
@@ -158,8 +163,10 @@ if TYPE_CHECKING:
         KandinskyV22PriorPipeline,
     )
     from .kandinsky3 import Kandinsky3Img2ImgPipeline, Kandinsky3Pipeline
+    from .kolors import KolorsImg2ImgPipeline, KolorsPipeline
     from .latent_consistency_models import LatentConsistencyModelImg2ImgPipeline, LatentConsistencyModelPipeline
     from .latent_diffusion import LDMSuperResolutionPipeline, LDMTextToImagePipeline
+    from .latte import LattePipeline
     from .pipeline_utils import DiffusionPipeline, ImagePipelineOutput
     from .pixart_alpha import PixArtAlphaPipeline
     from .shap_e import ShapEImg2ImgPipeline, ShapEPipeline
