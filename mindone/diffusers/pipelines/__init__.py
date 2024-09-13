@@ -19,6 +19,7 @@ _import_structure = {
         "StableDiffusionXLControlNetInpaintPipeline",
         "StableDiffusionXLControlNetPipeline",
     ],
+    "controlnet_hunyuandit": ["HunyuanDiTControlNetPipeline"],
     "dance_diffusion": ["DanceDiffusionPipeline"],
     "ddim": ["DDIMPipeline"],
     "ddpm": ["DDPMPipeline"],
@@ -67,6 +68,7 @@ _import_structure = {
         "LatentConsistencyModelImg2ImgPipeline",
         "LatentConsistencyModelPipeline",
     ],
+    "lumina": ["LuminaText2ImgPipeline"],
     "pixart_alpha": ["PixArtAlphaPipeline"],
     "shap_e": ["ShapEImg2ImgPipeline", "ShapEPipeline"],
     "stable_cascade": [
@@ -129,6 +131,7 @@ if TYPE_CHECKING:
         StableDiffusionXLControlNetInpaintPipeline,
         StableDiffusionXLControlNetPipeline,
     )
+    from .controlnet_hunyuandit import HunyuanDiTControlNetPipeline
     from .ddim import DDIMPipeline
     from .ddpm import DDPMPipeline
     from .deepfloyd_if import (
@@ -167,6 +170,7 @@ if TYPE_CHECKING:
     from .latent_consistency_models import LatentConsistencyModelImg2ImgPipeline, LatentConsistencyModelPipeline
     from .latent_diffusion import LDMSuperResolutionPipeline, LDMTextToImagePipeline
     from .latte import LattePipeline
+    from .lumina import LuminaText2ImgPipeline
     from .pipeline_utils import DiffusionPipeline, ImagePipelineOutput
     from .pixart_alpha import PixArtAlphaPipeline
     from .shap_e import ShapEImg2ImgPipeline, ShapEPipeline

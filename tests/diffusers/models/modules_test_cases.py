@@ -653,7 +653,43 @@ PRIOR_TRANSFORMER_CASES = [
 ]
 
 
-TRANSFORMERS_CASES = TRANSFORMER2D_CASES + PRIOR_TRANSFORMER_CASES
+LUMINANEXTDIT_CASES = [
+    "LuminaNextDiT2DModel",
+    "diffusers.models.transformers.lumina_nextdit2d.LuminaNextDiT2DModel",
+    "mindone.diffusers.models.transformers.lumina_nextdit2d.LuminaNextDiT2DModel",
+    (),
+    dict(
+        sample_size=16,
+        patch_size=2,
+        in_channels=4,
+        hidden_size=24,
+        num_layers=2,
+        num_attention_heads=3,
+        num_kv_heads=1,
+        multiple_of=16,
+        ffn_dim_multiplier=None,
+        norm_eps=1e-5,
+        learn_sigma=False,
+        qk_norm=True,
+        cross_attention_dim=32,
+        scaling_factor=1.0,
+    ),
+    (),
+    {
+        "hidden_states": np.random.randn(2, 4, 16, 16).astype(np.float32),
+        "timestep": np.random.rand(
+            2,
+        ),
+        "encoder_hidden_states": np.random.randn(2, 16, 32).astype(np.float32),
+        "encoder_mask": np.random.randn(2, 16).astype(np.float32),
+        "image_rotary_emb": np.random.randn(384, 384, 4).astype(np.float32),
+        "cross_attention_kwargs": {},
+        "return_dict": False,
+    },
+]
+
+
+TRANSFORMERS_CASES = TRANSFORMER2D_CASES + PRIOR_TRANSFORMER_CASES + LUMINANEXTDIT_CASES
 
 
 # unet

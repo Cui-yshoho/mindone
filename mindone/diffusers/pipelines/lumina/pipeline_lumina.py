@@ -1,5 +1,4 @@
-# Copyright 2024 the Latte Team and The HuggingFace Team.
-# All rights reserved.
+# Copyright 2024 Alpha-VLLM and The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,26 +14,27 @@
 
 import html
 import inspect
+import math
 import re
 import urllib.parse as ul
-from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
-from transformers import T5Tokenizer
+from transformers import AutoTokenizer
 
 import mindspore as ms
 from mindspore import ops
 
-from mindone.transformers import T5EncoderModel
+from mindone.transformers import GemmaModel
 
-from ...callbacks import MultiPipelineCallbacks, PipelineCallback
-from ...models import AutoencoderKL, LatteTransformer3DModel
-from ...pipelines.pipeline_utils import DiffusionPipeline
-from ...schedulers import KarrasDiffusionSchedulers
-from ...utils import BACKENDS_MAPPING, BaseOutput, is_bs4_available, is_ftfy_available, logging
+from ...image_processor import VaeImageProcessor
+from ...models import AutoencoderKL
+from ...models.embeddings import get_2d_rotary_pos_embed_lumina
+from ...models.transformers.lumina_nextdit2d import LuminaNextDiT2DModel
+from ...schedulers import FlowMatchEulerDiscreteScheduler
+from ...utils import BACKENDS_MAPPING, is_bs4_available, is_ftfy_available, logging
 from ...utils.mindspore_utils import randn_tensor
-from ...video_processor import VideoProcessor
+from ..pipeline_utils import DiffusionPipeline, ImagePipelineOutput
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -44,20 +44,18 @@ if is_bs4_available():
 if is_ftfy_available():
     import ftfy
 
-
 EXAMPLE_DOC_STRING = """
     Examples:
         ```py
         >>> import mindspore as ms
-        >>> from mindone.diffusers import LattePipeline
-        >>> from mindone.diffusers.utils import export_to_gif
+        >>> from mindone.diffusers import LuminaText2ImgPipeline
 
-        >>> # You can replace the checkpoint id with "maxin-cn/Latte-1" too.
-        >>> pipe = LattePipeline.from_pretrained("maxin-cn/Latte-1", mindspore_dtype=ms.float16)
+        >>> pipe = LuminaText2ImgPipeline.from_pretrained(
+        ...     "Alpha-VLLM/Lumina-Next-SFT-diffusers", mindspore_dtype=ms.bfloat16
+        ... )
 
-        >>> prompt = "A small cactus with a happy face in the Sahara desert."
-        >>> videos = pipe(prompt)[0][0]
-        >>> export_to_gif(videos, "latte.gif")
+        >>> prompt = "Upper body of a young woman in a Victorian-era outfit with brass goggles and leather straps. Background shows an industrial revolution cityscape with smoky skies and tall, metal structures"
+        >>> image = pipe(prompt)[0][0]
         ```
 """
 
@@ -119,148 +117,111 @@ def retrieve_timesteps(
     return timesteps, num_inference_steps
 
 
-@dataclass
-class LattePipelineOutput(BaseOutput):
-    frames: ms.Tensor
-
-
-class LattePipeline(DiffusionPipeline):
+class LuminaText2ImgPipeline(DiffusionPipeline):
     r"""
-    Pipeline for text-to-video generation using Latte.
+    Pipeline for text-to-image generation using Lumina-T2I.
 
     This model inherits from [`DiffusionPipeline`]. Check the superclass documentation for the generic methods the
     library implements for all the pipelines (such as downloading or saving, running on a particular device, etc.)
 
     Args:
         vae ([`AutoencoderKL`]):
-            Variational Auto-Encoder (VAE) Model to encode and decode videos to and from latent representations.
-        text_encoder ([`T5EncoderModel`]):
-            Frozen text-encoder. Latte uses
-            [T5](https://huggingface.co/docs/transformers/model_doc/t5#transformers.T5EncoderModel), specifically the
-            [t5-v1_1-xxl](https://huggingface.co/PixArt-alpha/PixArt-alpha/tree/main/t5-v1_1-xxl) variant.
-        tokenizer (`T5Tokenizer`):
+            Variational Auto-Encoder (VAE) Model to encode and decode images to and from latent representations.
+        text_encoder ([`AutoModel`]):
+            Frozen text-encoder. Lumina-T2I uses
+            [T5](https://huggingface.co/docs/transformers/model_doc/t5#transformers.AutoModel), specifically the
+            [t5-v1_1-xxl](https://huggingface.co/Alpha-VLLM/tree/main/t5-v1_1-xxl) variant.
+        tokenizer (`AutoModel`):
             Tokenizer of class
-            [T5Tokenizer](https://huggingface.co/docs/transformers/model_doc/t5#transformers.T5Tokenizer).
-        transformer ([`LatteTransformer3DModel`]):
-            A text conditioned `LatteTransformer3DModel` to denoise the encoded video latents.
+            [AutoModel](https://huggingface.co/docs/transformers/model_doc/t5#transformers.AutoModel).
+        transformer ([`Transformer2DModel`]):
+            A text conditioned `Transformer2DModel` to denoise the encoded image latents.
         scheduler ([`SchedulerMixin`]):
-            A scheduler to be used in combination with `transformer` to denoise the encoded video latents.
+            A scheduler to be used in combination with `transformer` to denoise the encoded image latents.
     """
 
-    bad_punct_regex = re.compile(r"[#®•©™&@·º½¾¿¡§~\)\(\]\[\}\{\|\\/\\*]{1,}")
+    bad_punct_regex = re.compile(
+        r"["
+        + "#®•©™&@·º½¾¿¡§~"
+        + r"\)"
+        + r"\("
+        + r"\]"
+        + r"\["
+        + r"\}"
+        + r"\{"
+        + r"\|"
+        + "\\"
+        + r"\/"
+        + r"\*"
+        + r"]{1,}"
+    )  # noqa
 
-    _optional_components = ["tokenizer", "text_encoder"]
+    _optional_components = []
     model_cpu_offload_seq = "text_encoder->transformer->vae"
-
-    _callback_tensor_inputs = [
-        "latents",
-        "prompt_embeds",
-        "negative_prompt_embeds",
-    ]
 
     def __init__(
         self,
-        tokenizer: T5Tokenizer,
-        text_encoder: T5EncoderModel,
+        transformer: LuminaNextDiT2DModel,
+        scheduler: FlowMatchEulerDiscreteScheduler,
         vae: AutoencoderKL,
-        transformer: LatteTransformer3DModel,
-        scheduler: KarrasDiffusionSchedulers,
+        text_encoder: GemmaModel,
+        tokenizer: AutoTokenizer,
     ):
         super().__init__()
 
         self.register_modules(
-            tokenizer=tokenizer, text_encoder=text_encoder, vae=vae, transformer=transformer, scheduler=scheduler
+            vae=vae,
+            text_encoder=text_encoder,
+            tokenizer=tokenizer,
+            transformer=transformer,
+            scheduler=scheduler,
         )
+        self.vae_scale_factor = 8
+        self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
+        self.max_sequence_length = 256
+        self.default_sample_size = (
+            self.transformer.config.sample_size
+            if hasattr(self, "transformer") and self.transformer is not None
+            else 128
+        )
+        self.default_image_size = self.default_sample_size * self.vae_scale_factor
 
-        self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
-        self.video_processor = VideoProcessor(vae_scale_factor=self.vae_scale_factor)
-
-    # Adapted from https://github.com/PixArt-alpha/PixArt-alpha/blob/master/diffusion/model/utils.py
-    def mask_text_embeddings(self, emb, mask):
-        if emb.shape[0] == 1:
-            keep_index = mask.sum().item()
-            return emb[:, :, :keep_index, :], keep_index  # 1, 120, 4096 -> 1 7 4096
-        else:
-            masked_feature = emb * mask[:, None, :, None]  # 1 120 4096
-            return masked_feature, emb.shape[2]
-
-    # Adapted from diffusers.pipelines.deepfloyd_if.pipeline_if.encode_prompt
-    def encode_prompt(
+    def _get_gemma_prompt_embeds(
         self,
         prompt: Union[str, List[str]],
-        do_classifier_free_guidance: bool = True,
-        negative_prompt: str = "",
         num_images_per_prompt: int = 1,
-        prompt_embeds: Optional[ms.Tensor] = None,
-        negative_prompt_embeds: Optional[ms.Tensor] = None,
-        clean_caption: bool = False,
-        mask_feature: bool = True,
-        dtype=None,
+        clean_caption: Optional[bool] = False,
+        max_length: Optional[int] = None,
     ):
-        r"""
-        Encodes the prompt into text encoder hidden states.
+        prompt = [prompt] if isinstance(prompt, str) else prompt
+        batch_size = len(prompt)
 
-        Args:
-            prompt (`str` or `List[str]`, *optional*):
-                prompt to be encoded
-            negative_prompt (`str` or `List[str]`, *optional*):
-                The prompt not to guide the video generation. If not defined, one has to pass `negative_prompt_embeds`
-                instead. Ignored when not using guidance (i.e., ignored if `guidance_scale` is less than `1`). For
-                Latte, this should be "".
-            do_classifier_free_guidance (`bool`, *optional*, defaults to `True`):
-                whether to use classifier free guidance or not
-            num_images_per_prompt (`int`, *optional*, defaults to 1):
-                number of video that should be generated per prompt
-            prompt_embeds (`ms.Tensor`, *optional*):
-                Pre-generated text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt weighting. If not
-                provided, text embeddings will be generated from `prompt` input argument.
-            negative_prompt_embeds (`ms.Tensor`, *optional*):
-                Pre-generated negative text embeddings. For Latte, it's should be the embeddings of the "" string.
-            clean_caption (bool, defaults to `False`):
-                If `True`, the function will preprocess and clean the provided caption before encoding.
-            mask_feature: (bool, defaults to `True`):
-                If `True`, the function will mask the text embeddings.
-        """
-        embeds_initially_provided = prompt_embeds is not None and negative_prompt_embeds is not None
+        prompt = self._text_preprocessing(prompt, clean_caption=clean_caption)
+        text_inputs = self.tokenizer(
+            prompt,
+            pad_to_multiple_of=8,
+            max_length=self.max_sequence_length,
+            truncation=True,
+            padding=True,
+            return_tensors="np",
+        )
+        text_input_ids = text_inputs.input_ids
+        untruncated_ids = self.tokenizer(prompt, padding="longest", return_tensors="np").input_ids
 
-        if prompt is not None and isinstance(prompt, str):
-            batch_size = 1
-        elif prompt is not None and isinstance(prompt, list):
-            batch_size = len(prompt)
-        else:
-            batch_size = prompt_embeds.shape[0]
-
-        max_length = 120
-        if prompt_embeds is None:
-            prompt = self._text_preprocessing(prompt, clean_caption=clean_caption)
-            text_inputs = self.tokenizer(
-                prompt,
-                padding="max_length",
-                max_length=max_length,
-                truncation=True,
-                return_attention_mask=True,
-                add_special_tokens=True,
-                return_tensors="np",
+        if untruncated_ids.shape[-1] >= text_input_ids.shape[-1] and not np.array_equal(
+            text_input_ids, untruncated_ids
+        ):
+            removed_text = self.tokenizer.batch_decode(untruncated_ids[:, self.max_sequence_length - 1 : -1])
+            logger.warning(
+                "The following part of your input was truncated because Gemma can only handle sequences up to"
+                f" {self.max_sequence_length} tokens: {removed_text}"
             )
-            text_input_ids = text_inputs.input_ids
-            untruncated_ids = self.tokenizer(prompt, padding="longest", return_tensors="np").input_ids
 
-            if untruncated_ids.shape[-1] >= text_input_ids.shape[-1] and not np.array_equal(
-                text_input_ids, untruncated_ids
-            ):
-                removed_text = self.tokenizer.batch_decode(untruncated_ids[:, max_length - 1 : -1])
-                logger.warning(
-                    "The following part of your input was truncated because CLIP can only handle sequences up to"
-                    f" {max_length} tokens: {removed_text}"
-                )
-
-            attention_mask = ms.tensor(text_inputs.attention_mask)
-            prompt_embeds_attention_mask = attention_mask
-
-            prompt_embeds = self.text_encoder(ms.tensor(text_input_ids), attention_mask=attention_mask)
-            prompt_embeds = prompt_embeds[0]
-        else:
-            prompt_embeds_attention_mask = ops.ones_like(prompt_embeds)
+        prompt_attention_mask = text_inputs.attention_mask
+        prompt_embeds = self.text_encoder(
+            ms.tensor(text_input_ids), attention_mask=ms.tensor(prompt_attention_mask), output_hidden_states=True
+        )
+        prompt_embeds = prompt_embeds[2][-2]
 
         if self.text_encoder is not None:
             dtype = self.text_encoder.dtype
@@ -271,62 +232,115 @@ class LattePipeline(DiffusionPipeline):
 
         prompt_embeds = prompt_embeds.to(dtype=dtype)
 
-        bs_embed, seq_len, _ = prompt_embeds.shape
+        _, seq_len, _ = prompt_embeds.shape
         # duplicate text embeddings and attention mask for each generation per prompt, using mps friendly method
         prompt_embeds = prompt_embeds.tile((1, num_images_per_prompt, 1))
-        prompt_embeds = prompt_embeds.view(bs_embed * num_images_per_prompt, seq_len, -1)
-        prompt_embeds_attention_mask = prompt_embeds_attention_mask.view(bs_embed, -1)
-        prompt_embeds_attention_mask = prompt_embeds_attention_mask.tile((num_images_per_prompt, 1))
+        prompt_embeds = prompt_embeds.view(batch_size * num_images_per_prompt, seq_len, -1)
+        prompt_attention_mask = prompt_attention_mask.tile((num_images_per_prompt, 1))
+        prompt_attention_mask = prompt_attention_mask.view(batch_size * num_images_per_prompt, -1)
 
-        # get unconditional embeddings for classifier free guidance
+        return prompt_embeds, prompt_attention_mask
+
+    # Adapted from diffusers.pipelines.deepfloyd_if.pipeline_if.encode_prompt
+    def encode_prompt(
+        self,
+        prompt: Union[str, List[str]],
+        do_classifier_free_guidance: bool = True,
+        negative_prompt: Union[str, List[str]] = None,
+        num_images_per_prompt: int = 1,
+        prompt_embeds: Optional[ms.Tensor] = None,
+        negative_prompt_embeds: Optional[ms.Tensor] = None,
+        prompt_attention_mask: Optional[ms.Tensor] = None,
+        negative_prompt_attention_mask: Optional[ms.Tensor] = None,
+        clean_caption: bool = False,
+        **kwargs,
+    ):
+        r"""
+        Encodes the prompt into text encoder hidden states.
+
+        Args:
+            prompt (`str` or `List[str]`, *optional*):
+                prompt to be encoded
+            negative_prompt (`str` or `List[str]`, *optional*):
+                The prompt not to guide the image generation. If not defined, one has to pass `negative_prompt_embeds`
+                instead. Ignored when not using guidance (i.e., ignored if `guidance_scale` is less than `1`). For
+                Lumina-T2I, this should be "".
+            do_classifier_free_guidance (`bool`, *optional*, defaults to `True`):
+                whether to use classifier free guidance or not
+            num_images_per_prompt (`int`, *optional*, defaults to 1):
+                number of images that should be generated per prompt
+            prompt_embeds (`ms.Tensor`, *optional*):
+                Pre-generated text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt weighting. If not
+                provided, text embeddings will be generated from `prompt` input argument.
+            negative_prompt_embeds (`ms.Tensor`, *optional*):
+                Pre-generated negative text embeddings. For Lumina-T2I, it's should be the embeddings of the "" string.
+            clean_caption (`bool`, defaults to `False`):
+                If `True`, the function will preprocess and clean the provided caption before encoding.
+            max_sequence_length (`int`, defaults to 256): Maximum sequence length to use for the prompt.
+        """
+        prompt = [prompt] if isinstance(prompt, str) else prompt
+        if prompt is not None:
+            batch_size = len(prompt)
+        else:
+            batch_size = prompt_embeds.shape[0]
+
+        if prompt_embeds is None:
+            prompt_embeds, prompt_attention_mask = self._get_gemma_prompt_embeds(
+                prompt=prompt,
+                num_images_per_prompt=num_images_per_prompt,
+                clean_caption=clean_caption,
+            )
+
+        # Get negative embeddings for classifier free guidance
         if do_classifier_free_guidance and negative_prompt_embeds is None:
-            uncond_tokens = [negative_prompt] * batch_size if isinstance(negative_prompt, str) else negative_prompt
-            uncond_tokens = self._text_preprocessing(uncond_tokens, clean_caption=clean_caption)
-            max_length = prompt_embeds.shape[1]
-            uncond_input = self.tokenizer(
-                uncond_tokens,
+            negative_prompt = negative_prompt if negative_prompt is not None else ""
+
+            # Normalize str to list
+            negative_prompt = batch_size * [negative_prompt] if isinstance(negative_prompt, str) else negative_prompt
+
+            if prompt is not None and type(prompt) is not type(negative_prompt):
+                raise TypeError(
+                    f"`negative_prompt` should be the same type to `prompt`, but got {type(negative_prompt)} !="
+                    f" {type(prompt)}."
+                )
+            elif isinstance(negative_prompt, str):
+                negative_prompt = [negative_prompt]
+            elif batch_size != len(negative_prompt):
+                raise ValueError(
+                    f"`negative_prompt`: {negative_prompt} has batch size {len(negative_prompt)}, but `prompt`:"
+                    f" {prompt} has batch size {batch_size}. Please make sure that passed `negative_prompt` matches"
+                    " the batch size of `prompt`."
+                )
+            # Padding negative prompt to the same length with prompt
+            prompt_max_length = prompt_embeds.shape[1]
+            negative_text_inputs = self.tokenizer(
+                negative_prompt,
                 padding="max_length",
-                max_length=max_length,
+                max_length=prompt_max_length,
                 truncation=True,
-                return_attention_mask=True,
-                add_special_tokens=True,
                 return_tensors="np",
             )
-            attention_mask = ms.tensor(uncond_input.attention_mask)
-
+            negative_text_input_ids = negative_text_inputs.input_ids
+            negative_prompt_attention_mask = negative_text_inputs.attention_mask
+            # Get the negative prompt embeddings
             negative_prompt_embeds = self.text_encoder(
-                ms.tensor(uncond_input.input_ids),
-                attention_mask=attention_mask,
+                ms.tensor(negative_text_input_ids),
+                attention_mask=ms.tensor(negative_prompt_attention_mask),
+                output_hidden_states=True,
             )
-            negative_prompt_embeds = negative_prompt_embeds[0]
 
-        if do_classifier_free_guidance:
-            # duplicate unconditional embeddings for each generation per prompt, using mps friendly method
-            seq_len = negative_prompt_embeds.shape[1]
+            negative_dtype = self.text_encoder.dtype
+            negative_prompt_embeds = negative_prompt_embeds[2][-2]
+            _, seq_len, _ = negative_prompt_embeds.shape
 
-            negative_prompt_embeds = negative_prompt_embeds.to(dtype=dtype)
-
+            negative_prompt_embeds = negative_prompt_embeds.to(dtype=negative_dtype)
+            # duplicate text embeddings and attention mask for each generation per prompt, using mps friendly method
             negative_prompt_embeds = negative_prompt_embeds.tile((1, num_images_per_prompt, 1))
             negative_prompt_embeds = negative_prompt_embeds.view(batch_size * num_images_per_prompt, seq_len, -1)
+            negative_prompt_attention_mask = negative_prompt_attention_mask.tile((num_images_per_prompt, 1))
+            negative_prompt_attention_mask = negative_prompt_attention_mask.view(batch_size * num_images_per_prompt, -1)
 
-            # For classifier free guidance, we need to do two forward passes.
-            # Here we concatenate the unconditional and text embeddings into a single batch
-            # to avoid doing two forward passes
-        else:
-            negative_prompt_embeds = None
-
-        # Perform additional masking.
-        if mask_feature and not embeds_initially_provided:
-            prompt_embeds = prompt_embeds.unsqueeze(1)
-            masked_prompt_embeds, keep_indices = self.mask_text_embeddings(prompt_embeds, prompt_embeds_attention_mask)
-            masked_prompt_embeds = masked_prompt_embeds.squeeze(1)
-            masked_negative_prompt_embeds = (
-                negative_prompt_embeds[:, :keep_indices, :] if negative_prompt_embeds is not None else None
-            )
-
-            return masked_prompt_embeds, masked_negative_prompt_embeds
-
-        return prompt_embeds, negative_prompt_embeds
+        return prompt_embeds, prompt_attention_mask, negative_prompt_embeds, negative_prompt_attention_mask
 
     # Copied from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion.StableDiffusionPipeline.prepare_extra_step_kwargs
     def prepare_extra_step_kwargs(self, generator, eta):
@@ -352,19 +366,14 @@ class LattePipeline(DiffusionPipeline):
         height,
         width,
         negative_prompt,
-        callback_on_step_end_tensor_inputs,
         prompt_embeds=None,
         negative_prompt_embeds=None,
+        prompt_attention_mask=None,
+        negative_prompt_attention_mask=None,
     ):
         if height % 8 != 0 or width % 8 != 0:
             raise ValueError(f"`height` and `width` have to be divisible by 8 but are {height} and {width}.")
 
-        if callback_on_step_end_tensor_inputs is not None and not all(
-            k in self._callback_tensor_inputs for k in callback_on_step_end_tensor_inputs
-        ):
-            raise ValueError(
-                f"`callback_on_step_end_tensor_inputs` has to be in {self._callback_tensor_inputs}, but found {[k for k in callback_on_step_end_tensor_inputs if k not in self._callback_tensor_inputs]}"
-            )
         if prompt is not None and prompt_embeds is not None:
             raise ValueError(
                 f"Cannot forward both `prompt`: {prompt} and `prompt_embeds`: {prompt_embeds}. Please make sure to"
@@ -389,12 +398,24 @@ class LattePipeline(DiffusionPipeline):
                 f" {negative_prompt_embeds}. Please make sure to only forward one of the two."
             )
 
+        if prompt_embeds is not None and prompt_attention_mask is None:
+            raise ValueError("Must provide `prompt_attention_mask` when specifying `prompt_embeds`.")
+
+        if negative_prompt_embeds is not None and negative_prompt_attention_mask is None:
+            raise ValueError("Must provide `negative_prompt_attention_mask` when specifying `negative_prompt_embeds`.")
+
         if prompt_embeds is not None and negative_prompt_embeds is not None:
             if prompt_embeds.shape != negative_prompt_embeds.shape:
                 raise ValueError(
                     "`prompt_embeds` and `negative_prompt_embeds` must have the same shape when passed directly, but"
                     f" got: `prompt_embeds` {prompt_embeds.shape} != `negative_prompt_embeds`"
                     f" {negative_prompt_embeds.shape}."
+                )
+            if prompt_attention_mask.shape != negative_prompt_attention_mask.shape:
+                raise ValueError(
+                    "`prompt_attention_mask` and `negative_prompt_attention_mask` must have the same shape when passed directly, but"
+                    f" got: `prompt_attention_mask` {prompt_attention_mask.shape} != `negative_prompt_attention_mask`"
+                    f" {negative_prompt_attention_mask.shape}."
                 )
 
     # Copied from diffusers.pipelines.deepfloyd_if.pipeline_if.IFPipeline._text_preprocessing
@@ -537,16 +558,12 @@ class LattePipeline(DiffusionPipeline):
 
         return caption.strip()
 
-    # Copied from diffusers.pipelines.text_to_video_synthesis.pipeline_text_to_video_synth.TextToVideoSDPipeline.prepare_latents
-    def prepare_latents(
-        self, batch_size, num_channels_latents, num_frames, height, width, dtype, generator, latents=None
-    ):
+    def prepare_latents(self, batch_size, num_channels_latents, height, width, dtype, generator, latents=None):
         shape = (
             batch_size,
             num_channels_latents,
-            num_frames,
-            height // self.vae_scale_factor,
-            width // self.vae_scale_factor,
+            int(height) // self.vae_scale_factor,
+            int(width) // self.vae_scale_factor,
         )
         if isinstance(generator, list) and len(generator) != batch_size:
             raise ValueError(
@@ -557,8 +574,6 @@ class LattePipeline(DiffusionPipeline):
         if latents is None:
             latents = randn_tensor(shape, generator=generator, dtype=dtype)
 
-        # scale the initial noise by the standard deviation required by the scheduler
-        latents = (latents * self.scheduler.init_noise_sigma).to(dtype)
         return latents
 
     @property
@@ -576,66 +591,64 @@ class LattePipeline(DiffusionPipeline):
     def num_timesteps(self):
         return self._num_timesteps
 
-    @property
-    def interrupt(self):
-        return self._interrupt
-
     def __call__(
         self,
         prompt: Union[str, List[str]] = None,
-        negative_prompt: str = "",
-        num_inference_steps: int = 50,
-        timesteps: Optional[List[int]] = None,
-        guidance_scale: float = 7.5,
-        num_images_per_prompt: int = 1,
-        video_length: int = 16,
-        height: int = 512,
-        width: int = 512,
-        eta: float = 0.0,
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+        num_inference_steps: int = 30,
+        timesteps: List[int] = None,
+        guidance_scale: float = 4.0,
+        negative_prompt: Union[str, List[str]] = None,
+        sigmas: List[float] = None,
+        num_images_per_prompt: Optional[int] = 1,
         generator: Optional[Union[np.random.Generator, List[np.random.Generator]]] = None,
         latents: Optional[ms.Tensor] = None,
         prompt_embeds: Optional[ms.Tensor] = None,
         negative_prompt_embeds: Optional[ms.Tensor] = None,
-        output_type: str = "pil",
+        prompt_attention_mask: Optional[ms.Tensor] = None,
+        negative_prompt_attention_mask: Optional[ms.Tensor] = None,
+        output_type: Optional[str] = "pil",
         return_dict: bool = False,
-        callback_on_step_end: Optional[Union[Callable[[int, int, Dict], None]]] = None,
-        callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         clean_caption: bool = True,
-        mask_feature: bool = True,
-        enable_temporal_attentions: bool = True,
-        decode_chunk_size: Optional[int] = None,
-    ) -> Union[LattePipelineOutput, Tuple]:
+        max_sequence_length: int = 256,
+        scaling_watershed: Optional[float] = 1.0,
+        proportional_attn: Optional[bool] = True,
+    ) -> Union[ImagePipelineOutput, Tuple]:
         """
         Function invoked when calling the pipeline for generation.
 
         Args:
             prompt (`str` or `List[str]`, *optional*):
-                The prompt or prompts to guide the video generation. If not defined, one has to pass `prompt_embeds`.
+                The prompt or prompts to guide the image generation. If not defined, one has to pass `prompt_embeds`.
                 instead.
             negative_prompt (`str` or `List[str]`, *optional*):
-                The prompt or prompts not to guide the video generation. If not defined, one has to pass
+                The prompt or prompts not to guide the image generation. If not defined, one has to pass
                 `negative_prompt_embeds` instead. Ignored when not using guidance (i.e., ignored if `guidance_scale` is
                 less than `1`).
-            num_inference_steps (`int`, *optional*, defaults to 100):
-                The number of denoising steps. More denoising steps usually lead to a higher quality video at the
+            num_inference_steps (`int`, *optional*, defaults to 30):
+                The number of denoising steps. More denoising steps usually lead to a higher quality image at the
                 expense of slower inference.
             timesteps (`List[int]`, *optional*):
-                Custom timesteps to use for the denoising process. If not defined, equal spaced `num_inference_steps`
-                timesteps are used. Must be in descending order.
-            guidance_scale (`float`, *optional*, defaults to 7.0):
+                Custom timesteps to use for the denoising process with schedulers which support a `timesteps` argument
+                in their `set_timesteps` method. If not defined, the default behavior when `num_inference_steps` is
+                passed will be used. Must be in descending order.
+            sigmas (`List[float]`, *optional*):
+                Custom sigmas to use for the denoising process with schedulers which support a `sigmas` argument in
+                their `set_timesteps` method. If not defined, the default behavior when `num_inference_steps` is passed
+                will be used.
+            guidance_scale (`float`, *optional*, defaults to 4.0):
                 Guidance scale as defined in [Classifier-Free Diffusion Guidance](https://arxiv.org/abs/2207.12598).
                 `guidance_scale` is defined as `w` of equation 2. of [Imagen
                 Paper](https://arxiv.org/pdf/2205.11487.pdf). Guidance scale is enabled by setting `guidance_scale >
-                1`. Higher guidance scale encourages to generate videos that are closely linked to the text `prompt`,
-                usually at the expense of lower video quality.
-            video_length (`int`, *optional*, defaults to 16):
-                The number of video frames that are generated. Defaults to 16 frames which at 8 frames per seconds
+                1`. Higher guidance scale encourages to generate images that are closely linked to the text `prompt`,
+                usually at the expense of lower image quality.
             num_images_per_prompt (`int`, *optional*, defaults to 1):
-                The number of videos to generate per prompt.
+                The number of images to generate per prompt.
             height (`int`, *optional*, defaults to self.unet.config.sample_size):
-                The height in pixels of the generated video.
+                The height in pixels of the generated image.
             width (`int`, *optional*, defaults to self.unet.config.sample_size):
-                The width in pixels of the generated video.
+                The width in pixels of the generated image.
             eta (`float`, *optional*, defaults to 0.0):
                 Corresponds to parameter eta (η) in the DDIM paper: https://arxiv.org/abs/2010.02502. Only applies to
                 [`schedulers.DDIMScheduler`], will be ignored for others.
@@ -643,65 +656,63 @@ class LattePipeline(DiffusionPipeline):
                 One or a list of [np.random.Generator(s)](https://numpy.org/doc/stable/reference/random/generator.html)
                 to make generation deterministic.
             latents (`ms.Tensor`, *optional*):
-                Pre-generated noisy latents, sampled from a Gaussian distribution, to be used as inputs for video
+                Pre-generated noisy latents, sampled from a Gaussian distribution, to be used as inputs for image
                 generation. Can be used to tweak the same generation with different prompts. If not provided, a latents
                 tensor will ge generated by sampling using the supplied random `generator`.
             prompt_embeds (`ms.Tensor`, *optional*):
                 Pre-generated text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt weighting. If not
                 provided, text embeddings will be generated from `prompt` input argument.
+            prompt_attention_mask (`ms.Tensor`, *optional*): Pre-generated attention mask for text embeddings.
             negative_prompt_embeds (`ms.Tensor`, *optional*):
-                Pre-generated negative text embeddings. For Latte this negative prompt should be "". If not provided,
-                negative_prompt_embeds will be generated from `negative_prompt` input argument.
+                Pre-generated negative text embeddings. For Lumina-T2I this negative prompt should be "". If not
+                provided, negative_prompt_embeds will be generated from `negative_prompt` input argument.
+            negative_prompt_attention_mask (`ms.Tensor`, *optional*):
+                Pre-generated attention mask for negative text embeddings.
             output_type (`str`, *optional*, defaults to `"pil"`):
-                The output format of the generate video. Choose between
+                The output format of the generate image. Choose between
                 [PIL](https://pillow.readthedocs.io/en/stable/): `PIL.Image.Image` or `np.array`.
-            return_dict (`bool`, *optional*, defaults to `True`):
+            return_dict (`bool`, *optional*, defaults to `False`):
                 Whether or not to return a [`~pipelines.stable_diffusion.IFPipelineOutput`] instead of a plain tuple.
-            callback_on_step_end (`Callable[[int, int, Dict], None]`, `PipelineCallback`, `MultiPipelineCallbacks`, *optional*):
-                A callback function or a list of callback functions to be called at the end of each denoising step.
-            callback_on_step_end_tensor_inputs (`List[str]`, *optional*):
-                A list of tensor inputs that should be passed to the callback function. If not defined, all tensor
-                inputs will be passed.
             clean_caption (`bool`, *optional*, defaults to `True`):
                 Whether or not to clean the caption before creating embeddings. Requires `beautifulsoup4` and `ftfy` to
                 be installed. If the dependencies are not installed, the embeddings will be created from the raw
                 prompt.
-            mask_feature (`bool` defaults to `True`): If set to `True`, the text embeddings will be masked.
-            enable_temporal_attentions (`bool`, *optional*, defaults to `True`): Whether to enable temporal attentions
-            decode_chunk_size (`int`, *optional*):
-                The number of frames to decode at a time. Higher chunk size leads to better temporal consistency at the
-                expense of more memory usage. By default, the decoder decodes all frames at once for maximal quality.
-                For lower memory usage, reduce `decode_chunk_size`.
+            max_sequence_length (`int` defaults to 120):
+                Maximum sequence length to use with the `prompt`.
+            callback_on_step_end (`Callable`, *optional*):
+                A function that calls at the end of each denoising steps during the inference. The function is called
+                with the following arguments: `callback_on_step_end(self: DiffusionPipeline, step: int, timestep: int,
+                callback_kwargs: Dict)`. `callback_kwargs` will include a list of all tensors as specified by
+                `callback_on_step_end_tensor_inputs`.
+            callback_on_step_end_tensor_inputs (`List`, *optional*):
+                The list of tensor inputs for the `callback_on_step_end` function. The tensors specified in the list
+                will be passed as `callback_kwargs` argument. You will only be able to include variables listed in the
+                `._callback_tensor_inputs` attribute of your pipeline class.
 
         Examples:
 
         Returns:
-            [`~pipelines.latte.pipeline_latte.LattePipelineOutput`] or `tuple`:
-                If `return_dict` is `True`, [`~pipelines.latte.pipeline_latte.LattePipelineOutput`] is returned,
-                otherwise a `tuple` is returned where the first element is a list with the generated images
+            [`~pipelines.ImagePipelineOutput`] or `tuple`:
+                If `return_dict` is `True`, [`~pipelines.ImagePipelineOutput`] is returned, otherwise a `tuple` is
+                returned where the first element is a list with the generated images
         """
-        if isinstance(callback_on_step_end, (PipelineCallback, MultiPipelineCallbacks)):
-            callback_on_step_end_tensor_inputs = callback_on_step_end.tensor_inputs
-
-        # 0. Default
-        decode_chunk_size = decode_chunk_size if decode_chunk_size is not None else video_length
+        height = height or self.default_sample_size * self.vae_scale_factor
+        width = width or self.default_sample_size * self.vae_scale_factor
 
         # 1. Check inputs. Raise error if not correct
-        height = height or self.transformer.config.sample_size * self.vae_scale_factor
-        width = width or self.transformer.config.sample_size * self.vae_scale_factor
         self.check_inputs(
             prompt,
             height,
             width,
             negative_prompt,
-            callback_on_step_end_tensor_inputs,
-            prompt_embeds,
-            negative_prompt_embeds,
+            prompt_embeds=prompt_embeds,
+            negative_prompt_embeds=negative_prompt_embeds,
+            prompt_attention_mask=prompt_attention_mask,
+            negative_prompt_attention_mask=negative_prompt_attention_mask,
         )
-        self._guidance_scale = guidance_scale
-        self._interrupt = False
+        cross_attention_kwargs = {}
 
-        # 2. Default height and width to transformer
+        # 2. Define call parameters
         if prompt is not None and isinstance(prompt, str):
             batch_size = 1
         elif prompt is not None and isinstance(prompt, list):
@@ -709,35 +720,46 @@ class LattePipeline(DiffusionPipeline):
         else:
             batch_size = prompt_embeds.shape[0]
 
+        if proportional_attn:
+            cross_attention_kwargs["base_sequence_length"] = (self.default_image_size // 16) ** 2
+
+        scaling_factor = math.sqrt(width * height / self.default_image_size**2)
+
         # here `guidance_scale` is defined analog to the guidance weight `w` of equation (2)
         # of the Imagen paper: https://arxiv.org/pdf/2205.11487.pdf . `guidance_scale = 1`
         # corresponds to doing no classifier free guidance.
         do_classifier_free_guidance = guidance_scale > 1.0
 
         # 3. Encode input prompt
-        prompt_embeds, negative_prompt_embeds = self.encode_prompt(
+        (
+            prompt_embeds,
+            prompt_attention_mask,
+            negative_prompt_embeds,
+            negative_prompt_attention_mask,
+        ) = self.encode_prompt(
             prompt,
             do_classifier_free_guidance,
             negative_prompt=negative_prompt,
             num_images_per_prompt=num_images_per_prompt,
             prompt_embeds=prompt_embeds,
             negative_prompt_embeds=negative_prompt_embeds,
+            prompt_attention_mask=prompt_attention_mask,
+            negative_prompt_attention_mask=negative_prompt_attention_mask,
             clean_caption=clean_caption,
-            mask_feature=mask_feature,
+            max_sequence_length=max_sequence_length,
         )
         if do_classifier_free_guidance:
-            prompt_embeds = ops.cat([negative_prompt_embeds, prompt_embeds], axis=0)
+            prompt_embeds = ops.cat([prompt_embeds, negative_prompt_embeds], axis=0)
+            prompt_attention_mask = ops.cat([prompt_attention_mask, negative_prompt_attention_mask], axis=0)
 
         # 4. Prepare timesteps
-        timesteps, num_inference_steps = retrieve_timesteps(self.scheduler, num_inference_steps, timesteps)
-        self._num_timesteps = len(timesteps)
+        timesteps, num_inference_steps = retrieve_timesteps(self.scheduler, num_inference_steps, timesteps, sigmas)
 
         # 5. Prepare latents.
         latent_channels = self.transformer.config.in_channels
         latents = self.prepare_latents(
             batch_size * num_images_per_prompt,
             latent_channels,
-            video_length,
             height,
             width,
             prompt_embeds.dtype,
@@ -745,110 +767,92 @@ class LattePipeline(DiffusionPipeline):
             latents,
         )
 
-        # 6. Prepare extra step kwargs. TODO: Logic should ideally just be moved out of the pipeline
-        extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
-
-        # 7. Denoising loop
-        num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
-
+        # 6. Denoising loop
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
-                if self.interrupt:
-                    continue
-
+                # expand the latents if we are doing classifier free guidance
                 latent_model_input = ops.cat([latents] * 2) if do_classifier_free_guidance else latents
-                latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
                 current_timestep = t
                 if not ops.is_tensor(current_timestep):
-                    # TODO: this requires sync between CPU and GPU. So try to pass timesteps as tensors if you can
-                    # This would be a good case for the `match` statement (Python 3.10+)
                     if isinstance(current_timestep, float):
                         dtype = ms.float64
                     else:
                         dtype = ms.int64
-                    current_timestep = ms.tensor([current_timestep], dtype=dtype)
+                    current_timestep = ms.tensor(
+                        [current_timestep],
+                        dtype=dtype,
+                    )
                 elif len(current_timestep.shape) == 0:
                     current_timestep = current_timestep[None]
                 # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
                 current_timestep = current_timestep.broadcast_to((latent_model_input.shape[0],))
 
-                # predict noise model_output
+                # reverse the timestep since Lumina uses t=0 as the noise and t=1 as the image
+                current_timestep = 1 - current_timestep / self.scheduler.config.num_train_timesteps
+
+                # prepare image_rotary_emb for positional encoding
+                # dynamic scaling_factor for different resolution.
+                # NOTE: For `Time-aware` denosing mechanism from Lumina-Next
+                # https://arxiv.org/abs/2406.18583, Sec 2.3
+                # NOTE: We should compute different image_rotary_emb with different timestep.
+                if current_timestep[0] < scaling_watershed:
+                    linear_factor = scaling_factor
+                    ntk_factor = 1.0
+                else:
+                    linear_factor = 1.0
+                    ntk_factor = scaling_factor
+                image_rotary_emb = get_2d_rotary_pos_embed_lumina(
+                    self.transformer.head_dim,
+                    384,
+                    384,
+                    linear_factor=linear_factor,
+                    ntk_factor=ntk_factor,
+                )
+
                 noise_pred = self.transformer(
-                    latent_model_input,
-                    encoder_hidden_states=prompt_embeds,
+                    hidden_states=latent_model_input,
                     timestep=current_timestep,
-                    enable_temporal_attentions=enable_temporal_attentions,
+                    encoder_hidden_states=prompt_embeds,
+                    encoder_mask=prompt_attention_mask,
+                    image_rotary_emb=image_rotary_emb,
+                    cross_attention_kwargs=cross_attention_kwargs,
                     return_dict=False,
                 )[0]
+                noise_pred = noise_pred.chunk(2, axis=1)[0]
 
-                # perform guidance
+                # perform guidance scale
+                # NOTE: For exact reproducibility reasons, we apply classifier-free guidance on only
+                # three channels by default. The standard approach to cfg applies it to all channels.
+                # This can be done by uncommenting the following line and commenting-out the line following that.
+                # eps, rest = model_out[:, :self.in_channels], model_out[:, self.in_channels:]
                 if do_classifier_free_guidance:
-                    noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                    noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+                    noise_pred_eps, noise_pred_rest = noise_pred[:, :3], noise_pred[:, 3:]
+                    noise_pred_cond_eps, noise_pred_uncond_eps = ops.split(
+                        noise_pred_eps, len(noise_pred_eps) // 2, axis=0
+                    )
+                    noise_pred_half = noise_pred_uncond_eps + guidance_scale * (
+                        noise_pred_cond_eps - noise_pred_uncond_eps
+                    )
+                    noise_pred_eps = ops.cat([noise_pred_half, noise_pred_half], axis=0)
 
-                # use learned sigma?
-                if not (
-                    hasattr(self.scheduler.config, "variance_type")
-                    and self.scheduler.config.variance_type in ["learned", "learned_range"]
-                ):
-                    noise_pred = noise_pred.chunk(2, axis=1)[0]
+                    noise_pred = ops.cat([noise_pred_eps, noise_pred_rest], axis=1)
+                    noise_pred, _ = noise_pred.chunk(2, axis=0)
 
-                # compute previous video: x_t -> x_t-1
-                latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
+                # compute the previous noisy sample x_t -> x_t-1
+                noise_pred = -noise_pred
+                latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
 
-                # call the callback, if provided
-                if callback_on_step_end is not None:
-                    callback_kwargs = {}
-                    for k in callback_on_step_end_tensor_inputs:
-                        callback_kwargs[k] = locals()[k]
-                    callback_outputs = callback_on_step_end(self, i, t, callback_kwargs)
+                progress_bar.update()
 
-                    latents = callback_outputs.pop("latents", latents)
-                    prompt_embeds = callback_outputs.pop("prompt_embeds", prompt_embeds)
-                    negative_prompt_embeds = callback_outputs.pop("negative_prompt_embeds", negative_prompt_embeds)
-
-                if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
-                    progress_bar.update()
-
-        if not output_type == "latents":
-            video = self.decode_latents(latents, video_length, decode_chunk_size=14)
-            video = self.video_processor.postprocess_video(video=video, output_type=output_type)
+        if not output_type == "latent":
+            latents = latents / self.vae.config.scaling_factor
+            image = self.vae.decode(latents, return_dict=False)[0]
+            image = self.image_processor.postprocess(image, output_type=output_type)
         else:
-            video = latents
+            image = latents
 
         if not return_dict:
-            return (video,)
+            return (image,)
 
-        return LattePipelineOutput(frames=video)
-
-    # Similar to diffusers.pipelines.stable_video_diffusion.pipeline_stable_video_diffusion.decode_latents
-    def decode_latents(self, latents: ms.Tensor, video_length: int, decode_chunk_size: int = 14):
-        # [batch, channels, frames, height, width] -> [batch*frames, channels, height, width]
-        latents = latents.permute(0, 2, 1, 3, 4).flatten(start_dim=0, end_dim=1)
-
-        latents = 1 / self.vae.config.scaling_factor * latents
-
-        # forward_vae_fn = self.vae._orig_mod.forward if is_compiled_module(self.vae) else self.vae.forward
-        forward_vae_fn = self.vae.construct
-        accepts_num_frames = "num_frames" in set(inspect.signature(forward_vae_fn).parameters.keys())
-
-        # decode decode_chunk_size frames at a time to avoid OOM
-        frames = []
-        for i in range(0, latents.shape[0], decode_chunk_size):
-            num_frames_in = latents[i : i + decode_chunk_size].shape[0]
-            decode_kwargs = {}
-            if accepts_num_frames:
-                # we only pass num_frames_in if it's expected
-                decode_kwargs["num_frames"] = num_frames_in
-
-            frame = self.vae.decode(latents[i : i + decode_chunk_size], **decode_kwargs)[0]
-            frames.append(frame)
-        frames = ops.cat(frames, axis=0)
-
-        # [batch*frames, channels, height, width] -> [batch, channels, frames, height, width]
-        frames = frames.reshape((-1, video_length) + frames.shape[1:]).permute(0, 2, 1, 3, 4)
-
-        # we always cast to float32 as this does not cause significant overhead and is compatible with bfloa16
-        frames = frames.float()
-        return frames
+        return ImagePipelineOutput(images=image)

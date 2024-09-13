@@ -24,10 +24,12 @@ _import_structure = {
     "autoencoders.autoencoder_tiny": ["AutoencoderTiny"],
     "autoencoders.consistency_decoder_vae": ["ConsistencyDecoderVAE"],
     "controlnet": ["ControlNetModel"],
+    "controlnet_hunyuan": ["HunyuanDiT2DControlNetModel", "HunyuanDiT2DMultiControlNetModel"],
     "dual_transformer_2d": ["DualTransformer2DModel"],
     "embeddings": ["ImageProjection"],
     "modeling_utils": ["ModelMixin"],
     "transformers.latte_transformer_3d": ["LatteTransformer3DModel"],
+    "transformers.lumina_nextdit2d": ["LuminaNextDiT2DModel"],
     "transformers.prior_transformer": ["PriorTransformer"],
     "transformers.t5_film_transformer": ["T5FilmDecoder"],
     "transformers.transformer_2d": ["Transformer2DModel"],
@@ -56,11 +58,13 @@ if TYPE_CHECKING:
         ConsistencyDecoderVAE,
     )
     from .controlnet import ControlNetModel
+    from .controlnet_hunyuan import HunyuanDiT2DControlNetModel, HunyuanDiT2DMultiControlNetModel
     from .embeddings import ImageProjection
     from .modeling_utils import ModelMixin
     from .transformers import (
         DualTransformer2DModel,
         LatteTransformer3DModel,
+        LuminaNextDiT2DModel,
         PriorTransformer,
         SD3Transformer2DModel,
         T5FilmDecoder,
