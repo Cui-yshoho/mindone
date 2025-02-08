@@ -4,6 +4,11 @@ from ..utils import _LazyModule
 
 # These modules contain pipelines from multiple libraries/frameworks
 _import_structure = {
+    "amused": [
+        "AmusedImg2ImgPipeline",
+        "AmusedInpaintPipeline",
+        "AmusedPipeline",
+    ],
     "animatediff": [
         "AnimateDiffPipeline",
         "AnimateDiffControlNetPipeline",
@@ -179,6 +184,7 @@ _import_structure = {
 }
 
 if TYPE_CHECKING:
+    from .amused import AmusedImg2ImgPipeline, AmusedInpaintPipeline, AmusedPipeline
     from .animatediff import (
         AnimateDiffControlNetPipeline,
         AnimateDiffPipeline,

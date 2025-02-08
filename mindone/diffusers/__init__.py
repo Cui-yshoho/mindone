@@ -71,6 +71,9 @@ _import_structure = {
         "get_scheduler",
     ],
     "pipelines": [
+        "AmusedImg2ImgPipeline",
+        "AmusedInpaintPipeline",
+        "AmusedPipeline",
         "AnimateDiffControlNetPipeline",
         "AnimateDiffPAGPipeline",
         "AnimateDiffPipeline",
@@ -199,6 +202,7 @@ _import_structure = {
         "WuerstchenPriorPipeline",
     ],
     "schedulers": [
+        "AmusedScheduler",
         "ConsistencyDecoderScheduler",
         "CMStochasticIterativeScheduler",
         "CogVideoXDDIMScheduler",
@@ -298,6 +302,9 @@ if TYPE_CHECKING:
         get_scheduler,
     )
     from .pipelines import (
+        AmusedImg2ImgPipeline,
+        AmusedInpaintPipeline,
+        AmusedPipeline,
         AnimateDiffControlNetPipeline,
         AnimateDiffPAGPipeline,
         AnimateDiffPipeline,
@@ -425,6 +432,7 @@ if TYPE_CHECKING:
         WuerstchenPriorPipeline,
     )
     from .schedulers import (
+        AmusedScheduler,
         CMStochasticIterativeScheduler,
         CogVideoXDDIMScheduler,
         CogVideoXDPMScheduler,
