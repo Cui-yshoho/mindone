@@ -241,7 +241,7 @@ class LTXImageToVideoPipelineSlowTests(PipelineTesterMixin, unittest.TestCase):
         expected_image = load_downloaded_numpy_from_hf_hub(
             "The-truth/mindone-testing-arrays",
             f"ltx_image2video_{dtype}.npy",
-            subfolder="flix",
+            subfolder="ltx",
         )
 
         assert (
