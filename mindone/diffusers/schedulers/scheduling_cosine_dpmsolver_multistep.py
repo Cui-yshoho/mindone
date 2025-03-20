@@ -470,7 +470,7 @@ class CosineDPMSolverMultistepScheduler(SchedulerMixin, ConfigMixin):
                 The current discrete timestep in the diffusion chain.
             sample (`ms.Tensor`):
                 A current instance of a sample created by the diffusion process.
-            generator (`torch.Generator`, *optional*):
+            generator (`np.random.Generator`, *optional*):
                 A random number generator.
             return_dict (`bool`):
                 Whether or not to return a [`~schedulers.scheduling_utils.SchedulerOutput`] or `tuple`.

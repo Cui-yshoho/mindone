@@ -119,7 +119,7 @@ class FluxTransformerBlock(nn.Cell):
         if hasattr(ops.operations.nn_ops, "FlashAttentionScore"):
             processor = FluxAttnProcessor2_0()
         else:
-            raise ValueError("The current PyTorch version does not support the `FlashAttentionScore` function.")
+            raise ValueError("The current MindSpore version does not support the `FlashAttentionScore` function.")
         self.attn = Attention(
             query_dim=dim,
             cross_attention_dim=None,

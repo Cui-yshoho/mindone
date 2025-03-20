@@ -408,7 +408,7 @@ class MusicLDMPipeline(DiffusionPipeline, StableDiffusionMixin):
                 Corresponds to parameter eta (η) from the [DDIM](https://arxiv.org/abs/2010.02502) paper. Only applies
                 to the [`~schedulers.DDIMScheduler`], and is ignored in other schedulers.
             generator (`np.random.Generator` or `List[np.random.Generator]`, *optional*):
-                A [`np.random.Generator`](https://pytorch.org/docs/stable/generated/np.random.Generator.html) to make
+                A [`np.random.Generator`](https://numpy.org/doc/stable/reference/random/generator.html) to make
                 generation deterministic.
             latents (`ms.Tensor`, *optional*):
                 Pre-generated noisy latents sampled from a Gaussian distribution, to be used as inputs for image
@@ -433,7 +433,7 @@ class MusicLDMPipeline(DiffusionPipeline, StableDiffusionMixin):
                 [`self.processor`](https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/attention_processor.py).
             output_type (`str`, *optional*, defaults to `"np"`):
                 The output format of the generated audio. Choose between `"np"` to return a NumPy `np.ndarray` or
-                `"np"` to return a PyTorch `ms.Tensor` object. Set to `"latent"` to return the latent diffusion
+                `"np"` to return a MindSpore `ms.Tensor` object. Set to `"latent"` to return the latent diffusion
                 model (LDM) output.
 
         Examples:

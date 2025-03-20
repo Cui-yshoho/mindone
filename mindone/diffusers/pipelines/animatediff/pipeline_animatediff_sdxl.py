@@ -104,15 +104,15 @@ def rescale_noise_cfg(noise_cfg, noise_pred_text, guidance_rescale=0.0):
     Flawed](https://arxiv.org/pdf/2305.08891.pdf).
 
     Args:
-        noise_cfg (`torch.Tensor`):
+        noise_cfg (`ms.Tensor`):
             The predicted noise tensor for the guided diffusion process.
-        noise_pred_text (`torch.Tensor`):
+        noise_pred_text (`ms.Tensor`):
             The predicted noise tensor for the text-guided diffusion process.
         guidance_rescale (`float`, *optional*, defaults to 0.0):
             A rescale factor applied to the noise predictions.
 
     Returns:
-        noise_cfg (`torch.Tensor`): The rescaled noise prediction tensor.
+        noise_cfg (`ms.Tensor`): The rescaled noise prediction tensor.
     """
     std_text = noise_pred_text.std(axis=tuple(range(1, noise_pred_text.ndim)), keepdims=True)
     std_cfg = noise_cfg.std(axis=tuple(range(1, noise_cfg.ndim)), keepdims=True)
@@ -903,7 +903,7 @@ class AnimateDiffSDXLPipeline(
                 Corresponds to parameter eta (η) in the DDIM paper: https://arxiv.org/abs/2010.02502. Only applies to
                 [`schedulers.DDIMScheduler`], will be ignored for others.
             generator (`np.random.Generator` or `List[np.random.Generator]`, *optional*):
-                One or a list of [numpy generator(s)](https://pytorch.org/docs/stable/generated/torch.Generator.html)
+                One or a list of [numpy generator(s)](https://numpy.org/doc/stable/reference/random/generator.html)
                 to make generation deterministic.
             latents (`ms.Tensor`, *optional*):
                 Pre-generated noisy latents, sampled from a Gaussian distribution, to be used as inputs for video

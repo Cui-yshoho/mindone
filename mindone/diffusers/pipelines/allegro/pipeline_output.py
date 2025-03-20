@@ -17,8 +17,8 @@ class AllegroPipelineOutput(BaseOutput):
     Args:
         frames (`ms.Tensor`, `np.ndarray`, or List[List[PIL.Image.Image]]):
             List of video outputs - It can be a nested list of length `batch_size,` with each sub-list containing
-            denoised PIL image sequences of length `num_frames.` It can also be a NumPy array or Torch tensor of shape
-            `(batch_size, num_frames, channels, height, width)`.
+            denoised PIL image sequences of length `num_frames.` It can also be a NumPy array or MindSpore tensor of
+            shape `(batch_size, num_frames, channels, height, width)`.
     """
 
     frames: Union[ms.Tensor, np.ndarray, List[List[PIL.Image.Image]]]

@@ -226,7 +226,7 @@ class CogView3PlusPipeline(DiffusionPipeline):
             do_classifier_free_guidance (`bool`, *optional*, defaults to `True`):
                 Whether to use classifier free guidance or not.
             num_images_per_prompt (`int`, *optional*, defaults to 1):
-                Number of images that should be generated per prompt. torch device to place the resulting embeddings on
+                Number of images that should be generated per prompt. device to place the resulting embeddings on
             prompt_embeds (`ms.Tensor`, *optional*):
                 Pre-generated text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt weighting. If not
                 provided, text embeddings will be generated from `prompt` input argument.

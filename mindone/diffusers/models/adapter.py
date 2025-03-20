@@ -160,8 +160,8 @@ class MultiAdapter(ModelMixin):
             pretrained_model_path (`os.PathLike`):
                 A path to a *directory* containing model weights saved using
                 [`~diffusers.models.adapter.MultiAdapter.save_pretrained`], e.g., `./my_model_directory/adapter`.
-            torch_dtype (`str` or `torch.dtype`, *optional*):
-                Override the default `torch.dtype` and load the model under this dtype. If `"auto"` is passed the dtype
+            mindspore_dtype (`str` or `ms.Ttype`, *optional*):
+                Override the default `ms.Type` and load the model under this dtype. If `"auto"` is passed the dtype
                 will be automatically derived from the model's weights.
             output_loading_info(`bool`, *optional*, defaults to `False`):
                 Whether or not to also return a dictionary containing missing keys, unexpected keys and error messages.

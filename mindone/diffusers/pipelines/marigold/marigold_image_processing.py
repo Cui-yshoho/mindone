@@ -50,7 +50,7 @@ class MarigoldImageProcessor(ConfigMixin):
     @staticmethod
     def ms_to_numpy(images: ms.Tensor) -> np.ndarray:
         """
-        Convert a PyTorch tensor to a NumPy image.
+        Convert a MindSpore tensor to a NumPy image.
         """
         images = images.permute(0, 2, 3, 1).float().numpy()
         return images
@@ -58,7 +58,7 @@ class MarigoldImageProcessor(ConfigMixin):
     @staticmethod
     def numpy_to_ms(images: np.ndarray) -> ms.Tensor:
         """
-        Convert a NumPy image to a PyTorch tensor.
+        Convert a NumPy image to a MindSpore tensor.
         """
         if np.issubdtype(images.dtype, np.integer) and not np.issubdtype(images.dtype, np.unsignedinteger):
             raise ValueError(f"Input image dtype={images.dtype} cannot be a signed integer.")
@@ -259,7 +259,7 @@ class MarigoldImageProcessor(ConfigMixin):
             An RGB-colorized tensor corresponding to the input image.
         """
         if not (ops.is_tensor(image) or isinstance(image, np.ndarray)):
-            raise ValueError("Argument must be a numpy array or torch tensor.")
+            raise ValueError("Argument must be a numpy array or mindspore tensor.")
         if _force_method not in (None, "matplotlib", "custom"):
             raise ValueError("_force_method must be either `None`, `'matplotlib'` or `'custom'`.")
 

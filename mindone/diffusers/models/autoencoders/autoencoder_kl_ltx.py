@@ -1049,7 +1049,7 @@ class AutoencoderKLLTXVideo(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         Encode a batch of images into latents.
 
         Args:
-            x (`torch.Tensor`): Input batch of images.
+            x (`ms.Tensor`): Input batch of images.
             return_dict (`bool`, *optional*, defaults to `False`):
                 Whether to return a [`~models.autoencoder_kl.AutoencoderKLOutput`] instead of a plain tuple.
 
@@ -1102,7 +1102,7 @@ class AutoencoderKLLTXVideo(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         Decode a batch of images.
 
         Args:
-            z (`torch.Tensor`): Input batch of latent vectors.
+            z (`ms.Tensor`): Input batch of latent vectors.
             return_dict (`bool`, *optional*, defaults to `False`):
                 Whether to return a [`~models.vae.DecoderOutput`] instead of a plain tuple.
 
@@ -1145,10 +1145,10 @@ class AutoencoderKLLTXVideo(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         r"""Encode a batch of images using a tiled encoder.
 
         Args:
-            x (`torch.Tensor`): Input batch of videos.
+            x (`ms.Tensor`): Input batch of videos.
 
         Returns:
-            `torch.Tensor`:
+            `ms.Tensor`:
                 The latent representation of the encoded videos.
         """
         batch_size, num_channels, num_frames, height, width = x.shape
@@ -1207,7 +1207,7 @@ class AutoencoderKLLTXVideo(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         Decode a batch of images using a tiled decoder.
 
         Args:
-            z (`torch.Tensor`): Input batch of latent vectors.
+            z (`ms.Tensor`): Input batch of latent vectors.
             return_dict (`bool`, *optional*, defaults to `False`):
                 Whether or not to return a [`~models.vae.DecoderOutput`] instead of a plain tuple.
 

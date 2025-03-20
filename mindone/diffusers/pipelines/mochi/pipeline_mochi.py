@@ -38,11 +38,11 @@ logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 EXAMPLE_DOC_STRING = """
     Examples:
         ```py
-        >>> import mindspore
+        >>> import mindspore as ms
         >>> from mindone.diffusers import MochiPipeline
         >>> from mindone.diffusers.utils import export_to_video
 
-        >>> pipe = MochiPipeline.from_pretrained("genmo/mochi-1-preview", torch_dtype=torch.bfloat16)
+        >>> pipe = MochiPipeline.from_pretrained("genmo/mochi-1-preview", mindspore_dtype=ms.bfloat16)
         >>> pipe.enable_vae_tiling()
         >>> prompt = "Close-up of a chameleon's eye, with its scaly skin changing color. Ultra high resolution 4k."
         >>> frames = pipe(prompt, num_inference_steps=28, guidance_scale=3.5)[0][0]
@@ -516,7 +516,7 @@ class MochiPipeline(DiffusionPipeline, Mochi1LoraLoaderMixin):
             num_videos_per_prompt (`int`, *optional*, defaults to 1):
                 The number of videos to generate per prompt.
             generator (`np.random.Generator` or `List[np.random.Generator]`, *optional*):
-                One or a list of [numpy generator(s)](https://pytorch.org/docs/stable/generated/torch.Generator.html)
+                One or a list of [numpy generator(s)](https://numpy.org/doc/stable/reference/random/generator.html)
                 to make generation deterministic.
             latents (`ms.Tensor`, *optional*):
                 Pre-generated noisy latents, sampled from a Gaussian distribution, to be used as inputs for image

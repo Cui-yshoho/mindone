@@ -393,7 +393,7 @@ class KandinskyImg2ImgPipeline(DiffusionPipeline):
             image = [image]
         if not all(isinstance(i, (PIL.Image.Image, ms.Tensor)) for i in image):
             raise ValueError(
-                f"Input is in incorrect format: {[type(i) for i in image]}. Currently, we only support  PIL image and pytorch tensor"
+                f"Input is in incorrect format: {[type(i) for i in image]}. Currently, we only support  PIL image and mindspore tensor"
             )
 
         image = ops.cat([prepare_image(i, width, height) for i in image], axis=0)

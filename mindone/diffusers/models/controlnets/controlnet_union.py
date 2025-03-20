@@ -595,28 +595,28 @@ class ControlNetUnionModel(ModelMixin, ConfigMixin, FromOriginalModelMixin):
         The [`ControlNetUnionModel`] forward method.
 
         Args:
-            sample (`torch.Tensor`):
+            sample (`ms.Tensor`):
                 The noisy input tensor.
-            timestep (`Union[torch.Tensor, float, int]`):
+            timestep (`Union[ms.Tensor, float, int]`):
                 The number of timesteps to denoise an input.
-            encoder_hidden_states (`torch.Tensor`):
+            encoder_hidden_states (`ms.Tensor`):
                 The encoder hidden states.
-            controlnet_cond (`List[torch.Tensor]`):
+            controlnet_cond (`List[ms.Tensor]`):
                 The conditional input tensors.
-            control_type (`torch.Tensor`):
+            control_type (`ms.Tensor`):
                 A tensor of shape `(batch, num_control_type)` with values `0` or `1` depending on whether the control
                 type is used.
             control_type_idx (`List[int]`):
                 The indices of `control_type`.
             conditioning_scale (`float`, defaults to `1.0`):
                 The scale factor for ControlNet outputs.
-            class_labels (`torch.Tensor`, *optional*, defaults to `None`):
+            class_labels (`ms.Tensor`, *optional*, defaults to `None`):
                 Optional class labels for conditioning. Their embeddings will be summed with the timestep embeddings.
-            timestep_cond (`torch.Tensor`, *optional*, defaults to `None`):
+            timestep_cond (`ms.Tensor`, *optional*, defaults to `None`):
                 Additional conditional embeddings for timestep. If provided, the embeddings will be summed with the
                 timestep_embedding passed through the `self.time_embedding` layer to obtain the final timestep
                 embeddings.
-            attention_mask (`torch.Tensor`, *optional*, defaults to `None`):
+            attention_mask (`ms.Tensor`, *optional*, defaults to `None`):
                 An attention mask of shape `(batch, key_tokens)` is applied to `encoder_hidden_states`. If `1` the mask
                 is kept, otherwise if `0` it is discarded. Mask will be converted into a bias, which adds large
                 negative values to the attention scores corresponding to "discard" tokens.

@@ -365,7 +365,7 @@ class MarigoldNormalsPipeline(DiffusionPipeline):
                 Random number generator object to ensure reproducibility.
             output_type (`str`, *optional*, defaults to `"np"`):
                 Preferred format of the output's `prediction` and the optional `uncertainty` fields. The accepted
-                values are: `"np"` (numpy array) or `"pt"` (torch tensor).
+                values are: `"np"` (numpy array) or `"ms"` (mindspore tensor).
             output_uncertainty (`bool`, *optional*, defaults to `False`):
                 When enabled, the output's `uncertainty` field contains the predictive uncertainty map, provided that
                 the `ensemble_size` argument is set to a value above 2.

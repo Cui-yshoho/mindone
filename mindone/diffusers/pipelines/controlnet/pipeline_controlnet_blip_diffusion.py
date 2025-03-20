@@ -286,7 +286,7 @@ class BlipDiffusionControlNetPipeline(DiffusionPipeline):
                 The number of denoising steps. More denoising steps usually lead to a higher quality image at the
                 expense of slower inference.
             generator (`np.random.Generator` or `List[np.random.Generator]`, *optional*):
-                One or a list of [torch generator(s)](https://pytorch.org/docs/stable/generated/torch.Generator.html)
+                One or a list of [numpy generator(s)](https://pytorch.org/docs/stable/generated/torch.Generator.html)
                 to make generation deterministic.
             neg_prompt (`str`, *optional*, defaults to ""):
                 The prompt or prompts not to guide the image generation. Ignored when not using guidance (i.e., ignored

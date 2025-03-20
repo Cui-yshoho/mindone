@@ -362,7 +362,7 @@ class CogVideoXDPMScheduler(SchedulerMixin, ConfigMixin):
                 because predicted original sample is clipped to [-1, 1] when `self.config.clip_sample` is `True`. If no
                 clipping has happened, "corrected" `model_output` would coincide with the one provided as input and
                 `use_clipped_model_output` has no effect.
-            generator (`torch.Generator`, *optional*):
+            generator (`np.random.Generator`, *optional*):
                 A random number generator.
             variance_noise (`ms.Tensor`):
                 Alternative to generating noise with `generator` by directly providing the noise for the variance

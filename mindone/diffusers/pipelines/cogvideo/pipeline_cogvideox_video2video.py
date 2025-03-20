@@ -289,7 +289,7 @@ class CogVideoXVideoToVideoPipeline(DiffusionPipeline):
                 weighting. If not provided, negative_prompt_embeds will be generated from `negative_prompt` input
                 argument.
             dtype: (`ms.Type`, *optional*):
-                torch dtype
+                mindspore dtype
         """
         prompt = [prompt] if isinstance(prompt, str) else prompt
         if prompt is not None:
@@ -606,7 +606,7 @@ class CogVideoXVideoToVideoPipeline(DiffusionPipeline):
             num_videos_per_prompt (`int`, *optional*, defaults to 1):
                 The number of videos to generate per prompt.
             generator (`np.random.Generator` or `List[np.random.Generator]`, *optional*):
-                One or a list of [torch generator(s)](https://pytorch.org/docs/stable/generated/torch.Generator.html)
+                One or a list of [numpy generator(s)](https://pytorch.org/docs/stable/generated/torch.Generator.html)
                 to make generation deterministic.
             latents (`ms.Tensor`, *optional*):
                 Pre-generated noisy latents, sampled from a Gaussian distribution, to be used as inputs for image

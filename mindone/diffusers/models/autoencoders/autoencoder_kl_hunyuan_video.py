@@ -786,8 +786,8 @@ class AutoencoderKLHunyuanVideo(ModelMixin, ConfigMixin):
         Encode a batch of images into latents.
 
         Args:
-            x (`torch.Tensor`): Input batch of images.
-            return_dict (`bool`, *optional*, defaults to `True`):
+            x (`ms.Tensor`): Input batch of images.
+            return_dict (`bool`, *optional*, defaults to `False`):
                 Whether to return a [`~models.autoencoder_kl.AutoencoderKLOutput`] instead of a plain tuple.
 
         Returns:
@@ -832,8 +832,8 @@ class AutoencoderKLHunyuanVideo(ModelMixin, ConfigMixin):
         Decode a batch of images.
 
         Args:
-            z (`torch.Tensor`): Input batch of latent vectors.
-            return_dict (`bool`, *optional*, defaults to `True`):
+            z (`ms.Tensor`): Input batch of latent vectors.
+            return_dict (`bool`, *optional*, defaults to `False`):
                 Whether to return a [`~models.vae.DecoderOutput`] instead of a plain tuple.
 
         Returns:
@@ -880,10 +880,10 @@ class AutoencoderKLHunyuanVideo(ModelMixin, ConfigMixin):
         r"""Encode a batch of images using a tiled encoder.
 
         Args:
-            x (`torch.Tensor`): Input batch of videos.
+            x (`ms.Tensor`): Input batch of videos.
 
         Returns:
-            `torch.Tensor`:
+            `ms.Tensor`:
                 The latent representation of the encoded videos.
         """
         batch_size, num_channels, num_frames, height, width = x.shape
@@ -931,8 +931,8 @@ class AutoencoderKLHunyuanVideo(ModelMixin, ConfigMixin):
         Decode a batch of images using a tiled decoder.
 
         Args:
-            z (`torch.Tensor`): Input batch of latent vectors.
-            return_dict (`bool`, *optional*, defaults to `True`):
+            z (`ms.Tensor`): Input batch of latent vectors.
+            return_dict (`bool`, *optional*, defaults to `False`):
                 Whether or not to return a [`~models.vae.DecoderOutput`] instead of a plain tuple.
 
         Returns:
@@ -1029,7 +1029,7 @@ class AutoencoderKLHunyuanVideo(ModelMixin, ConfigMixin):
         for i in range(0, num_frames, tile_latent_stride_num_frames):
             tile = z[:, :, i : i + tile_latent_min_num_frames + 1, :, :]
             if self.use_tiling and (tile.shape[-1] > tile_latent_min_width or tile.shape[-2] > tile_latent_min_height):
-                decoded = self.tiled_decode(tile, return_dict=True)[0]
+                decoded = self.tiled_decode(tile, return_dict=False)[0]
             else:
                 tile = self.post_quant_conv(tile)
                 decoded = self.decoder(tile)
@@ -1060,10 +1060,10 @@ class AutoencoderKLHunyuanVideo(ModelMixin, ConfigMixin):
     ) -> Union[DecoderOutput, ms.Tensor]:
         r"""
         Args:
-            sample (`torch.Tensor`): Input sample.
+            sample (`ms.Tensor`): Input sample.
             sample_posterior (`bool`, *optional*, defaults to `False`):
                 Whether to sample from the posterior.
-            return_dict (`bool`, *optional*, defaults to `True`):
+            return_dict (`bool`, *optional*, defaults to `False`):
                 Whether or not to return a [`DecoderOutput`] instead of a plain tuple.
         """
         x = sample

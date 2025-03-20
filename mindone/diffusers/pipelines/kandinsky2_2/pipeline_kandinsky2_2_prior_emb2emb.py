@@ -393,7 +393,7 @@ class KandinskyV22PriorEmb2EmbPipeline(DiffusionPipeline):
             image_embeds = image.repeat_interleave(num_images_per_prompt, dim=0)
         elif isinstance(image, ms.Tensor) and image.ndim != 4:
             raise ValueError(
-                f" if pass `image` as pytorch tensor, or a list of pytorch tensor, "
+                f" if pass `image` as mindspore tensor, or a list of mindspore tensor, "
                 f"please make sure each tensor has shape [batch_size, channels, height, width], currently {image[0].unsqueeze(0).shape}"
             )
         else:

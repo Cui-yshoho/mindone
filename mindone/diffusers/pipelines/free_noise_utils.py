@@ -43,8 +43,8 @@ class SplitInferenceModule(nn.Cell):
     them into smaller chunks, processing each chunk separately, and then reassembling the results.
 
     Args:
-        module (`nn.Module`):
-            The underlying PyTorch module that will be applied to each chunk of split inputs.
+        module (`nn.Cell`):
+            The underlying MindSpore cell that will be applied to each chunk of split inputs.
         split_size (`int`, defaults to `1`):
             The size of each chunk after splitting the input tensor.
         split_dim (`int`, defaults to `0`):
@@ -54,7 +54,7 @@ class SplitInferenceModule(nn.Cell):
 
     Workflow:
         1. The keyword arguments specified in `input_kwargs_to_split` are split into smaller chunks using
-        `torch.split()` along the dimension `split_dim` and with a chunk size of `split_size`.
+        `ops.split()` along the dimension `split_dim` and with a chunk size of `split_size`.
         2. The `module` is invoked once for each split with both the split inputs and any unchanged arguments
         that were passed.
         3. The output tensors from each split are concatenated back together along `split_dim` before returning.
@@ -100,13 +100,13 @@ class SplitInferenceModule(nn.Cell):
         Args:
             *args (`Any`):
                 Positional arguments that are passed directly to the `module` without modification.
-            **kwargs (`Dict[str, torch.Tensor]`):
+            **kwargs (`Dict[str, ms.Tensor]`):
                 Keyword arguments passed to the underlying `module`. Only keyword arguments whose names match the
-                entries in `input_kwargs_to_split` and are of type `torch.Tensor` will be split. The remaining keyword
+                entries in `input_kwargs_to_split` and are of type `ms.Tensor` will be split. The remaining keyword
                 arguments are passed unchanged.
 
         Returns:
-            `Union[torch.Tensor, Tuple[torch.Tensor]]`:
+            `Union[ms.Tensor, Tuple[ms.Tensor]]`:
                 The outputs obtained from `SplitInferenceModule` are the same as if the underlying module was inferred
                 without it.
                 - If the underlying module returns a single tensor, the result will be a single concatenated tensor
@@ -139,7 +139,7 @@ class SplitInferenceModule(nn.Cell):
             return tuple([ops.cat(x, axis=self.split_dim) for x in zip(*results)])
         else:
             raise ValueError(
-                "In order to use the SplitInferenceModule, it is necessary for the underlying `module` to either return a torch.Tensor or a tuple of torch.Tensor's."  # noqa: E501
+                "In order to use the SplitInferenceModule, it is necessary for the underlying `module` to either return a ms.Tensor or a tuple of ms.Tensor's."  # noqa: E501
             )
 
 

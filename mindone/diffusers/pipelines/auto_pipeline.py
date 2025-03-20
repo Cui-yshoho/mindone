@@ -691,7 +691,7 @@ class AutoPipelineForImage2Image(ConfigMixin):
     @classmethod
     def from_pipe(cls, pipeline, **kwargs):
         r"""
-        Instantiates a image-to-image Pytorch diffusion pipeline from another instantiated diffusion pipeline class.
+        Instantiates a image-to-image MindSpore diffusion pipeline from another instantiated diffusion pipeline class.
 
         The from_pipe() method takes care of returning the correct pipeline class instance by finding the
         image-to-image pipeline linked to the pipeline class using pattern matching on pipeline class name.

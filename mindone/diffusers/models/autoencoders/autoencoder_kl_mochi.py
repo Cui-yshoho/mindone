@@ -983,7 +983,7 @@ class AutoencoderKLMochi(ModelMixin, ConfigMixin):
         Decode a batch of images.
 
         Args:
-            z (`torch.Tensor`): Input batch of latent vectors.
+            z (`ms.Tensor`): Input batch of latent vectors.
             return_dict (`bool`, *optional*, defaults to `False`):
                 Whether to return a [`~models.vae.DecoderOutput`] instead of a plain tuple.
 
@@ -1023,10 +1023,10 @@ class AutoencoderKLMochi(ModelMixin, ConfigMixin):
         r"""Encode a batch of images using a tiled encoder.
 
         Args:
-            x (`torch.Tensor`): Input batch of videos.
+            x (`ms.Tensor`): Input batch of videos.
 
         Returns:
-            `torch.Tensor`:
+            `ms.Tensor`:
                 The latent representation of the encoded videos.
         """
         batch_size, num_channels, num_frames, height, width = x.shape

@@ -35,7 +35,7 @@ logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 class LTXVideoAttentionProcessor2_0:
     r"""
-    Processor for implementing scaled dot-product attention (enabled by default if you're using PyTorch 2.0). This is
+    Processor for implementing scaled dot-product attention (enabled by default). This is
     used in the LTX model. It applies a normalization layer and rotary embedding on the query and key vector.
     """
 

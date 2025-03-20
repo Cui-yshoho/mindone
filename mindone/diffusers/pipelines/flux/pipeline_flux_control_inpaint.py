@@ -82,7 +82,7 @@ EXAMPLE_DOC_STRING = """
             num_inference_steps=30,
             strength=0.9,
             guidance_scale=10.0,
-            generator=torch.Generator().manual_seed(42),
+            generator=np.random.Generator(np.random.PCG64(seed=42)),
         )[0][0]
         make_image_grid([image, control_image, mask_image, output.resize(image.size)], rows=1, cols=4).save(
             "output.png"

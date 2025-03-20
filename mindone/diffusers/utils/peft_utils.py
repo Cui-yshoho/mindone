@@ -41,7 +41,7 @@ def scale_lora_layers(model, weight):
     Adjust the weightage given to the LoRA layers of the model.
 
     Args:
-        model (`torch.nn.Module`):
+        model (`ms.nn.Cell`):
             The model to scale.
         weight (`float`):
             The weight to be given to the LoRA layers.
@@ -61,7 +61,7 @@ def unscale_lora_layers(model, weight: Optional[float] = None):
     Removes the previously passed weight given to the LoRA layers of the model.
 
     Args:
-        model (`torch.nn.Module`):
+        model (`ms.nn.Cell`):
             The model to scale.
         weight (`float`, *optional*):
             The weight to be given to the LoRA layers. If no scale is passed the scale of the lora layer will be

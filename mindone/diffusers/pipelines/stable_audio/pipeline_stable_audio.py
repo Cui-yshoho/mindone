@@ -42,7 +42,7 @@ EXAMPLE_DOC_STRING = """
         >>> import numpy as np
 
         >>> repo_id = "stabilityai/stable-audio-open-1.0"
-        >>> pipe = StableAudioPipeline.from_pretrained(repo_id, mindspore_dtype=torch.float32)
+        >>> pipe = StableAudioPipeline.from_pretrained(repo_id, mindspore_dtype=ms.float32)
 
         >>> # define the prompts
         >>> prompt = "The sound of a hammer hitting a wooden surface."
@@ -514,7 +514,7 @@ class StableAudioPipeline(DiffusionPipeline):
                 Corresponds to parameter eta (η) from the [DDIM](https://arxiv.org/abs/2010.02502) paper. Only applies
                 to the [`~schedulers.DDIMScheduler`], and is ignored in other schedulers.
             generator (`np.random.Generator` or `List[np.random.Generator]`, *optional*):
-                A [`np.random.Generator`](https://pytorch.org/docs/stable/generated/np.random.Generator.html) to make
+                A [`np.random.Generator`](https://numpy.org/doc/stable/reference/random/generator.html) to make
                 generation deterministic.
             latents (`ms.Tensor`, *optional*):
                 Pre-generated noisy latents sampled from a Gaussian distribution, to be used as inputs for audio
@@ -550,7 +550,7 @@ class StableAudioPipeline(DiffusionPipeline):
                 every step.
             output_type (`str`, *optional*, defaults to `"pt"`):
                 The output format of the generated audio. Choose between `"np"` to return a NumPy `np.ndarray` or
-                `"pt"` to return a PyTorch `ms.Tensor` object. Set to `"latent"` to return the latent diffusion
+                `"pt"` to return a MindSpore `ms.Tensor` object. Set to `"latent"` to return the latent diffusion
                 model (LDM) output.
 
         Examples:
