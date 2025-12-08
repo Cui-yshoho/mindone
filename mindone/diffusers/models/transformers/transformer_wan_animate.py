@@ -16,9 +16,9 @@ import math
 from typing import Any, Dict, Optional, Tuple, Union
 
 import mindspore as ms
-import mindspore.nn as nn
-from mindspore import mint
 import mindspore.mint.nn.functional as F
+import mindspore.nn as nn
+from mindspore import mint, ops
 from mindspore.nn.utils import no_init_parameters
 
 from ...configuration_utils import ConfigMixin, register_to_config
@@ -28,11 +28,10 @@ from ..attention import AttentionMixin, AttentionModuleMixin, FeedForward
 from ..attention_dispatch import dispatch_attention_fn
 from ..cache_utils import CacheMixin
 from ..embeddings import PixArtAlphaTextProjection, TimestepEmbedding, Timesteps, get_1d_rotary_pos_embed
+from ..layers_compat import RMSNorm, unflatten
 from ..modeling_outputs import Transformer2DModelOutput
 from ..modeling_utils import ModelMixin
 from ..normalization import FP32LayerNorm
-from ..layers_compat import unflatten, RMSNorm
-
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -168,7 +167,7 @@ class MotionConv2d(nn.Cell):
         if self.blur:
             # NOTE: the original implementation uses a 2D upfirdn operation with the upsampling and downsampling rates
             # set to 1, which should be equivalent to a 2D convolution
-            expanded_kernel = self.blur_kernel[None, None, :, :].expand((self.in_channels, 1, -1, -1))
+            expanded_kernel = self.blur_kernel[None, None, :, :].broadcast_to((self.in_channels, 1, -1, -1))
             x = F.conv2d(x, expanded_kernel, padding=self.blur_padding, groups=self.in_channels)
 
         # Main Conv2D with scaling
@@ -345,9 +344,8 @@ class WanAnimateMotionEncoder(nn.Cell):
         motion_feat = motion_feat.to(ms.float32)
         weight = weight.to(ms.float32)
 
-        Q = mint.linalg.qr(weight)[0].to(device=motion_feat.device)
-
-        motion_feat_diag = mint.diag_embed(motion_feat)  # Alpha, diagonal matrix
+        Q = mint.linalg.qr(weight)[0]
+        motion_feat_diag = ops.diag_embed(motion_feat)  # Alpha, diagonal matrix
         motion_decomposition = mint.matmul(motion_feat_diag, Q.T)
         motion_vec = mint.sum(motion_decomposition, dim=1)
 
@@ -374,9 +372,11 @@ class WanAnimateFaceEncoder(nn.Cell):
 
         self.act = mint.nn.SiLU()
 
-        self.conv1_local = mint.nn.Conv1d(in_dim, hidden_dim * num_heads, kernel_size=kernel_size, stride=1)
-        self.conv2 = mint.nn.Conv1d(hidden_dim, hidden_dim, kernel_size, stride=2)
-        self.conv3 = mint.nn.Conv1d(hidden_dim, hidden_dim, kernel_size, stride=2)
+        self.conv1_local = nn.Conv1d(
+            in_dim, hidden_dim * num_heads, kernel_size=kernel_size, stride=1, has_bias=True, pad_mode="valid"
+        )
+        self.conv2 = nn.Conv1d(hidden_dim, hidden_dim, kernel_size, stride=2, has_bias=True, pad_mode="valid")
+        self.conv3 = nn.Conv1d(hidden_dim, hidden_dim, kernel_size, stride=2, has_bias=True, pad_mode="valid")
 
         self.norm1 = mint.nn.LayerNorm(hidden_dim, eps, elementwise_affine=False)
         self.norm2 = mint.nn.LayerNorm(hidden_dim, eps, elementwise_affine=False)
@@ -391,7 +391,10 @@ class WanAnimateFaceEncoder(nn.Cell):
 
         # Reshape to channels-first to apply causal Conv1d over frame dim
         x = x.permute(0, 2, 1)
-        x = F.pad(x, self.time_causal_padding, mode=self.pad_mode)
+        if x.dtype == ms.bfloat16:
+            x = F.pad(x.float(), self.time_causal_padding, mode=self.pad_mode).to(ms.bfloat16)
+        else:
+            x = F.pad(x, self.time_causal_padding, mode=self.pad_mode)
         x = self.conv1_local(x)  # [B, C, T_padded] --> [B, N * C, T]
         x = unflatten(x, 1, (self.num_heads, -1)).flatten(0, 1)  # [B, N * C, T] --> [B * N, C, T]
         # Reshape back to channels-last to apply LayerNorm over channel dim
@@ -400,14 +403,20 @@ class WanAnimateFaceEncoder(nn.Cell):
         x = self.act(x)
 
         x = x.permute(0, 2, 1)
-        x = F.pad(x, self.time_causal_padding, mode=self.pad_mode)
+        if x.dtype == ms.bfloat16:
+            x = F.pad(x.float(), self.time_causal_padding, mode=self.pad_mode).to(ms.bfloat16)
+        else:
+            x = F.pad(x, self.time_causal_padding, mode=self.pad_mode)
         x = self.conv2(x)
         x = x.permute(0, 2, 1)
         x = self.norm2(x)
         x = self.act(x)
 
         x = x.permute(0, 2, 1)
-        x = F.pad(x, self.time_causal_padding, mode=self.pad_mode)
+        if x.dtype == ms.bfloat16:
+            x = F.pad(x.float(), self.time_causal_padding, mode=self.pad_mode).to(ms.bfloat16)
+        else:
+            x = F.pad(x, self.time_causal_padding, mode=self.pad_mode)
         x = self.conv3(x)
         x = x.permute(0, 2, 1)
         x = self.norm3(x)
@@ -416,7 +425,7 @@ class WanAnimateFaceEncoder(nn.Cell):
         x = self.out_proj(x)
         x = unflatten(x, 0, (batch_size, -1)).permute(0, 2, 1, 3)  # [B * N, T, C_out] --> [B, T, N, C_out]
 
-        padding = self.padding_tokens.repeat(batch_size, x.shape[1], 1, 1).to(device=x.device)
+        padding = self.padding_tokens.repeat(batch_size, x.shape[1], 1, 1)
         x = mint.cat([x, padding], dim=-2)  # [B, T, N, C_out] --> [B, T, N + 1, C_out]
 
         return x
@@ -425,13 +434,6 @@ class WanAnimateFaceEncoder(nn.Cell):
 class WanAnimateFaceBlockAttnProcessor:
     _attention_backend = None
     _parallel_config = None
-
-    def __init__(self):
-        if not hasattr(F, "scaled_dot_product_attention"):
-            raise ImportError(
-                f"{self.__class__.__name__} requires PyTorch 2.0. To use it, please upgrade PyTorch to version 2.0 or"
-                f" higher."
-            )
 
     def __call__(
         self,
@@ -489,7 +491,7 @@ class WanAnimateFaceBlockAttnProcessor:
         return hidden_states
 
 
-class WanAnimateFaceBlockCrossAttention(nn.Module, AttentionModuleMixin):
+class WanAnimateFaceBlockCrossAttention(nn.Cell, AttentionModuleMixin):
     """
     Temporally-aligned cross attention with the face motion signal in the Wan Animate Face Blocks.
     """
@@ -547,12 +549,6 @@ class WanAnimateFaceBlockCrossAttention(nn.Module, AttentionModuleMixin):
 class WanAttnProcessor:
     _attention_backend = None
     _parallel_config = None
-
-    def __init__(self):
-        if not hasattr(F, "scaled_dot_product_attention"):
-            raise ImportError(
-                "WanAttnProcessor requires PyTorch 2.0. To use it, please upgrade PyTorch to version 2.0 or higher."
-            )
 
     def __call__(
         self,
@@ -640,7 +636,7 @@ class WanAttnProcessor:
 
 
 # Copied from diffusers.models.transformers.transformer_wan.WanAttention
-class WanAttention(ms.nn.Module, AttentionModuleMixin):
+class WanAttention(ms.nn.Cell, AttentionModuleMixin):
     _default_processor_cls = WanAttnProcessor
     _available_processors = [WanAttnProcessor]
 
@@ -747,7 +743,7 @@ class WanAttention(ms.nn.Module, AttentionModuleMixin):
 
 
 # Copied from diffusers.models.transformers.transformer_wan.WanImageEmbedding
-class WanImageEmbedding(ms.nn.Module):
+class WanImageEmbedding(ms.nn.Cell):
     def __init__(self, in_features: int, out_features: int, pos_embed_seq_len=None):
         super().__init__()
 
@@ -805,7 +801,7 @@ class WanTimeTextImageEmbedding(nn.Cell):
         if timestep_seq_len is not None:
             timestep = unflatten(timestep, 0, (-1, timestep_seq_len))
 
-        time_embedder_dtype = next(iter(self.time_embedder.parameters())).dtype
+        time_embedder_dtype = self.time_embedder.linear_1.weight.dtype
         if timestep.dtype != time_embedder_dtype and time_embedder_dtype != ms.int8:
             timestep = timestep.to(time_embedder_dtype)
         temb = self.time_embedder(timestep).type_as(encoder_hidden_states)
@@ -870,13 +866,13 @@ class WanRotaryPosEmbed(nn.Cell):
         freqs_cos = self.freqs_cos.split(split_sizes, dim=1)
         freqs_sin = self.freqs_sin.split(split_sizes, dim=1)
 
-        freqs_cos_f = freqs_cos[0][:ppf].view(ppf, 1, 1, -1).expand((ppf, pph, ppw, -1))
-        freqs_cos_h = freqs_cos[1][:pph].view(1, pph, 1, -1).expand((ppf, pph, ppw, -1))
-        freqs_cos_w = freqs_cos[2][:ppw].view(1, 1, ppw, -1).expand((ppf, pph, ppw, -1))
+        freqs_cos_f = freqs_cos[0][:ppf].view(ppf, 1, 1, -1).broadcast_to((ppf, pph, ppw, -1))
+        freqs_cos_h = freqs_cos[1][:pph].view(1, pph, 1, -1).broadcast_to((ppf, pph, ppw, -1))
+        freqs_cos_w = freqs_cos[2][:ppw].view(1, 1, ppw, -1).broadcast_to((ppf, pph, ppw, -1))
 
-        freqs_sin_f = freqs_sin[0][:ppf].view(ppf, 1, 1, -1).expand((ppf, pph, ppw, -1))
-        freqs_sin_h = freqs_sin[1][:pph].view(1, pph, 1, -1).expand((ppf, pph, ppw, -1))
-        freqs_sin_w = freqs_sin[2][:ppw].view(1, 1, ppw, -1).expand((ppf, pph, ppw, -1))
+        freqs_sin_f = freqs_sin[0][:ppf].view(ppf, 1, 1, -1).broadcast_to((ppf, pph, ppw, -1))
+        freqs_sin_h = freqs_sin[1][:pph].view(1, pph, 1, -1).broadcast_to((ppf, pph, ppw, -1))
+        freqs_sin_w = freqs_sin[2][:ppw].view(1, 1, ppw, -1).broadcast_to((ppf, pph, ppw, -1))
 
         freqs_cos = mint.cat([freqs_cos_f, freqs_cos_h, freqs_cos_w], dim=-1).reshape(1, ppf * pph * ppw, 1, -1)
         freqs_sin = mint.cat([freqs_sin_f, freqs_sin_h, freqs_sin_w], dim=-1).reshape(1, ppf * pph * ppw, 1, -1)
@@ -1073,7 +1069,9 @@ class WanAnimateTransformer3DModel(
         # 1. Patch & position embedding
         self.rope = WanRotaryPosEmbed(attention_head_dim, patch_size, rope_max_seq_len)
         self.patch_embedding = mint.nn.Conv3d(in_channels, inner_dim, kernel_size=patch_size, stride=patch_size)
-        self.pose_patch_embedding = mint.nn.Conv3d(latent_channels, inner_dim, kernel_size=patch_size, stride=patch_size)
+        self.pose_patch_embedding = mint.nn.Conv3d(
+            latent_channels, inner_dim, kernel_size=patch_size, stride=patch_size
+        )
 
         # 2. Condition embeddings
         self.condition_embedder = WanTimeTextImageEmbedding(
@@ -1148,7 +1146,7 @@ class WanAnimateTransformer3DModel(
         pose_hidden_states: Optional[ms.Tensor] = None,
         face_pixel_values: Optional[ms.Tensor] = None,
         motion_encode_batch_size: Optional[int] = None,
-        return_dict: bool = True,
+        return_dict: bool = False,
         attention_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Union[ms.Tensor, Dict[str, ms.Tensor]]:
         """
@@ -1197,7 +1195,7 @@ class WanAnimateTransformer3DModel(
             )
 
         batch_size, num_channels, num_frames, height, width = hidden_states.shape
-        p_t, p_h, p_w = self.config.patch_size
+        p_t, p_h, p_w = self.config["patch_size"]
         post_patch_num_frames = num_frames // p_t
         post_patch_height = height // p_h
         post_patch_width = width // p_w
@@ -1211,7 +1209,7 @@ class WanAnimateTransformer3DModel(
         # Add pose embeddings to hidden states
         hidden_states[:, :, 1:] = hidden_states[:, :, 1:] + pose_hidden_states
         # Calling contiguous() here is important so that we don't recompile when performing regional compilation
-        hidden_states = hidden_states.flatten(2).transpose(1, 2).contiguous()
+        hidden_states = hidden_states.flatten(2).swapaxes(1, 2).contiguous()
 
         # 3. Condition embeddings (time, text, image)
         # Wan Animate is based on Wan 2.1 and thus uses Wan 2.1's timestep logic
@@ -1233,7 +1231,7 @@ class WanAnimateTransformer3DModel(
 
         # Extract motion features using motion encoder
         # Perform batched motion encoder inference to allow trading off inference speed for memory usage
-        motion_encode_batch_size = motion_encode_batch_size or self.config.motion_encoder_batch_size
+        motion_encode_batch_size = motion_encode_batch_size or self.config["motion_encoder_batch_size"]
         face_batches = mint.split(face_pixel_values, motion_encode_batch_size)
         motion_vec_batches = []
         for face_batch in face_batches:
@@ -1254,17 +1252,16 @@ class WanAnimateTransformer3DModel(
             hidden_states = block(hidden_states, encoder_hidden_states, timestep_proj, rotary_emb)
 
             # Face adapter integration: apply after every 5th block (0, 5, 10, 15, ...)
-            if block_idx % self.config.inject_face_latents_blocks == 0:
-                face_adapter_block_idx = block_idx // self.config.inject_face_latents_blocks
+            if block_idx % self.config["inject_face_latents_blocks"] == 0:
+                face_adapter_block_idx = block_idx // self.config["inject_face_latents_blocks"]
                 face_adapter_output = self.face_adapter[face_adapter_block_idx](hidden_states, motion_vec)
                 # In case the face adapter and main transformer blocks are on different devices, which can happen when
                 # using model parallelism
-                face_adapter_output = face_adapter_output.to(device=hidden_states.device)
                 hidden_states = face_adapter_output + hidden_states
 
         # 6. Output norm, projection & unpatchify
         # batch_size, inner_dim
-        shift, scale = (self.scale_shift_table.to(temb.device) + temb.unsqueeze(1)).chunk(2, dim=1)
+        shift, scale = (self.scale_shift_table + temb.unsqueeze(1)).chunk(2, dim=1)
 
         hidden_states_original_dtype = hidden_states.dtype
         hidden_states = self.norm_out(hidden_states.float())
@@ -1272,8 +1269,6 @@ class WanAnimateTransformer3DModel(
         # When using multi-GPU inference via accelerate these will be on the
         # first device rather than the last device, which hidden_states ends up
         # on.
-        shift = shift.to(hidden_states.device)
-        scale = scale.to(hidden_states.device)
         hidden_states = (hidden_states * (1 + scale) + shift).to(dtype=hidden_states_original_dtype)
 
         hidden_states = self.proj_out(hidden_states)

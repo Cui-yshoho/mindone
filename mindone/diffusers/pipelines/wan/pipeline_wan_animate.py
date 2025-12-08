@@ -16,13 +16,15 @@ import html
 from copy import deepcopy
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+import numpy as np
 import PIL
 import regex as re
-import numpy as np
-import mindspore as ms
-from mindspore import mint
-import mindspore.mint.nn.functional as F
 from transformers import AutoTokenizer, CLIPImageProcessor
+
+import mindspore as ms
+import mindspore.mint.nn.functional as F
+from mindspore import mint
+
 from mindone.transformers import CLIPVisionModel, UMT5EncoderModel
 
 from ...callbacks import MultiPipelineCallbacks, PipelineCallback
@@ -36,7 +38,6 @@ from ...video_processor import VideoProcessor
 from ..pipeline_utils import DiffusionPipeline
 from .image_processor import WanAnimateImageProcessor
 from .pipeline_output import WanPipelineOutput
-
 
 XLA_AVAILABLE = False
 
@@ -57,7 +58,6 @@ EXAMPLE_DOC_STRING = """
         >>> pipe = WanAnimatePipeline.from_pretrained(model_id, mindspore_dtype=ms.bfloat16)
         >>> # Optionally upcast the Wan VAE to FP32
         >>> pipe.vae.to(ms.float32)
-        >>> pipe.to("Ascend")
 
         >>> # Load the reference character image
         >>> image = load_image(
@@ -236,10 +236,8 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
         prompt: Union[str, List[str]] = None,
         num_videos_per_prompt: int = 1,
         max_sequence_length: int = 512,
-        device: Optional[ms.device] = None,
         dtype: Optional[ms.Type] = None,
     ):
-        device = device or self._execution_device
         dtype = dtype or self.text_encoder.dtype
 
         prompt = [prompt] if isinstance(prompt, str) else prompt
@@ -258,11 +256,11 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
         text_input_ids, mask = ms.tensor(text_inputs.input_ids), ms.tensor(text_inputs.attention_mask)
         seq_lens = mask.gt(0).sum(dim=1).long()
 
-        prompt_embeds = self.text_encoder(text_input_ids.to(device), mask.to(device)).last_hidden_state
-        prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
+        prompt_embeds = self.text_encoder(text_input_ids, mask, return_dict=True).last_hidden_state
+        prompt_embeds = prompt_embeds.to(dtype=dtype)
         prompt_embeds = [u[:v] for u, v in zip(prompt_embeds, seq_lens)]
         prompt_embeds = mint.stack(
-            [mint.cat([u, u.new_zeros(max_sequence_length - u.size(0), u.size(1))]) for u in prompt_embeds], dim=0
+            [mint.cat([u, u.new_zeros((max_sequence_length - u.shape[0], u.shape[1]))]) for u in prompt_embeds], dim=0
         )
 
         # duplicate text embeddings for each generation per prompt, using mps friendly method
@@ -276,11 +274,10 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
     def encode_image(
         self,
         image: PipelineImageInput,
-        device: Optional[ms.device] = None,
     ):
-        device = device or self._execution_device
-        image = self.image_processor(images=image, return_tensors="np").to(device)
-        image_embeds = self.image_encoder(**image, output_hidden_states=True)
+        image = self.image_processor(images=image, return_tensors="np")
+        image = {k: ms.tensor(v) for k, v in image.items()}
+        image_embeds = self.image_encoder(**image, output_hidden_states=True, return_dict=True)
         return image_embeds.hidden_states[-2]
 
     # Copied from diffusers.pipelines.wan.pipeline_wan.WanPipeline.encode_prompt
@@ -293,7 +290,6 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
         prompt_embeds: Optional[ms.Tensor] = None,
         negative_prompt_embeds: Optional[ms.Tensor] = None,
         max_sequence_length: int = 226,
-        device: Optional[ms.device] = None,
         dtype: Optional[ms.Type] = None,
     ):
         r"""
@@ -317,13 +313,9 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 Pre-generated negative text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt
                 weighting. If not provided, negative_prompt_embeds will be generated from `negative_prompt` input
                 argument.
-            device: (`ms.device`, *optional*):
-                mindspore device
             dtype: (`ms.Type`, *optional*):
                 mindspore dtype
         """
-        device = device or self._execution_device
-
         prompt = [prompt] if isinstance(prompt, str) else prompt
         if prompt is not None:
             batch_size = len(prompt)
@@ -335,7 +327,6 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 prompt=prompt,
                 num_videos_per_prompt=num_videos_per_prompt,
                 max_sequence_length=max_sequence_length,
-                device=device,
                 dtype=dtype,
             )
 
@@ -359,7 +350,6 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 prompt=negative_prompt,
                 num_videos_per_prompt=num_videos_per_prompt,
                 max_sequence_length=max_sequence_length,
-                device=device,
                 dtype=dtype,
             )
 
@@ -464,15 +454,12 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
         mask_len: int = 1,
         mask_pixel_values: Optional[ms.Tensor] = None,
         dtype: Optional[ms.Type] = None,
-        device: Union[str, ms.device] = "Ascend",
     ) -> ms.Tensor:
         # mask_pixel_values shape (if supplied): [B, C = 1, T, latent_h, latent_w]
         if mask_pixel_values is None:
-            mask_lat_size = mint.zeros(
-                (batch_size, 1, (latent_t - 1) * 4 + 1, latent_h, latent_w), dtype=dtype
-            ).to(device=device)
+            mask_lat_size = mint.zeros((batch_size, 1, (latent_t - 1) * 4 + 1, latent_h, latent_w), dtype=dtype)
         else:
-            mask_lat_size = mask_pixel_values.clone().to(device=device, dtype=dtype)
+            mask_lat_size = mask_pixel_values.clone().to(dtype=dtype)
         mask_lat_size[:, :, :mask_len] = 1
         first_frame_mask = mask_lat_size[:, :, 0:1]
         # Repeat first frame mask self.vae_scale_factor_temporal (= 4) times in the frame dimension
@@ -480,7 +467,9 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
         mask_lat_size = mint.concat([first_frame_mask, mask_lat_size[:, :, 1:]], dim=2)
         mask_lat_size = mask_lat_size.view(
             batch_size, -1, self.vae_scale_factor_temporal, latent_h, latent_w
-        ).transpose(1, 2)  # [B, C = 1, 4 * T_lat, H_lat, W_lat] --> [B, C = 4, T_lat, H_lat, W_lat]
+        ).transpose(
+            1, 2
+        )  # [B, C = 1, 4 * T_lat, H_lat, W_lat] --> [B, C = 4, T_lat, H_lat, W_lat]
 
         return mask_lat_size
 
@@ -491,7 +480,6 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
         sample_mode: int = "argmax",
         generator: Optional[Union[np.random.Generator, List[np.random.Generator]]] = None,
         dtype: Optional[ms.Type] = None,
-        device: Optional[ms.device] = None,
     ) -> ms.Tensor:
         # image shape: (B, C, H, W) or (B, C, T, H, W)
         dtype = dtype or self.vae.dtype
@@ -504,23 +492,22 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
         latent_width = width // self.vae_scale_factor_spatial
 
         # Encode image to latents using VAE
-        image = image.to(device=device, dtype=dtype)
+        image = image.to(dtype=dtype)
         if isinstance(generator, list):
             # Like in prepare_latents, assume len(generator) == batch_size
             ref_image_latents = [
-                retrieve_latents(self.vae, self.vae.encode(image)[0], generator=g, sample_mode=sample_mode) for g in generator
+                retrieve_latents(self.vae, self.vae.encode(image)[0], generator=g, sample_mode=sample_mode)
+                for g in generator
             ]
             ref_image_latents = mint.cat(ref_image_latents)
         else:
             ref_image_latents = retrieve_latents(self.vae, self.vae.encode(image)[0], generator, sample_mode)
         # Standardize latents in preparation for Wan VAE encode
         latents_mean = (
-            ms.tensor(self.vae.config.latents_mean)
-            .view(1, self.vae.config.z_dim, 1, 1, 1)
-            .to(ref_image_latents.device, ref_image_latents.dtype)
+            ms.tensor(self.vae.config.latents_mean).view(1, self.vae.config.z_dim, 1, 1, 1).to(ref_image_latents.dtype)
         )
         latents_recip_std = 1.0 / ms.tensor(self.vae.config.latents_std).view(1, self.vae.config.z_dim, 1, 1, 1).to(
-            ref_image_latents.device, ref_image_latents.dtype
+            ref_image_latents.dtype
         )
         ref_image_latents = (ref_image_latents - latents_mean) * latents_recip_std
         # Handle the case where we supply one image and one generator, but batch_size > 1 (e.g. generating multiple
@@ -529,7 +516,7 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
             ref_image_latents = ref_image_latents.expand(batch_size, -1, -1, -1, -1)
 
         # Prepare I2V mask in latent space and prepend to the reference image latents along channel dim
-        reference_image_mask = self.get_i2v_mask(batch_size, 1, latent_height, latent_width, 1, None, dtype, device)
+        reference_image_mask = self.get_i2v_mask(batch_size, 1, latent_height, latent_width, 1, None, dtype)
         reference_image_latents = mint.cat([reference_image_mask, ref_image_latents], dim=1)
 
         return reference_image_latents
@@ -550,7 +537,6 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
         sample_mode: str = "argmax",
         generator: Optional[Union[np.random.Generator, List[np.random.Generator]]] = None,
         dtype: Optional[ms.Type] = None,
-        device: Optional[ms.device] = None,
     ) -> ms.Tensor:
         # prev_segment_cond_video shape: (B, C, T, H, W) in pixel space if supplied
         # background_video shape: (B, C, T, H, W) (same as prev_segment_cond_video shape)
@@ -561,7 +547,7 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 prev_segment_cond_video = background_video[:, :, :prev_segment_cond_frames].to(dtype)
             else:
                 cond_frames_shape = (batch_size, 3, prev_segment_cond_frames, height, width)  # In pixel space
-                prev_segment_cond_video = mint.zeros(cond_frames_shape, dtype=dtype).to(device=device)
+                prev_segment_cond_video = mint.zeros(cond_frames_shape, dtype=dtype)
 
         data_batch_size, channels, _, segment_height, segment_width = prev_segment_cond_video.shape
         num_latent_frames = (segment_frame_length - 1) // self.vae_scale_factor_temporal + 1
@@ -584,9 +570,7 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
             remaining_segment = background_video[:, :, prev_segment_cond_frames:].to(dtype)
         else:
             remaining_segment_frames = segment_frame_length - prev_segment_cond_frames
-            remaining_segment = mint.zeros(
-                (batch_size, channels, remaining_segment_frames, height, width), dtype=dtype
-            ).to(device=device)
+            remaining_segment = mint.zeros((batch_size, channels, remaining_segment_frames, height, width), dtype=dtype)
 
         # Prepend the conditioning frames from the previous segment to the remaining segment video in the frame dim
         prev_segment_cond_video = prev_segment_cond_video.to(dtype=dtype)
@@ -595,13 +579,16 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
         if isinstance(generator, list):
             if data_batch_size == len(generator):
                 prev_segment_cond_latents = [
-                    retrieve_latents(self.vae, self.vae.encode(full_segment_cond_video[i].unsqueeze(0))[0], g, sample_mode)
+                    retrieve_latents(
+                        self.vae, self.vae.encode(full_segment_cond_video[i].unsqueeze(0))[0], g, sample_mode
+                    )
                     for i, g in enumerate(generator)
                 ]
             elif data_batch_size == 1:
                 # Like prepare_latents, assume len(generator) == batch_size
                 prev_segment_cond_latents = [
-                    retrieve_latents(self.vae,self.vae.encode(full_segment_cond_video)[0], g, sample_mode) for g in generator
+                    retrieve_latents(self.vae, self.vae.encode(full_segment_cond_video)[0], g, sample_mode)
+                    for g in generator
                 ]
             else:
                 raise ValueError(
@@ -617,10 +604,10 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
         latents_mean = (
             ms.tensor(self.vae.config.latents_mean)
             .view(1, self.vae.config.z_dim, 1, 1, 1)
-            .to(prev_segment_cond_latents.device, prev_segment_cond_latents.dtype)
+            .to(prev_segment_cond_latents.dtype)
         )
         latents_recip_std = 1.0 / ms.tensor(self.vae.config.latents_std).view(1, self.vae.config.z_dim, 1, 1, 1).to(
-            prev_segment_cond_latents.device, prev_segment_cond_latents.dtype
+            prev_segment_cond_latents.dtype
         )
         prev_segment_cond_latents = (prev_segment_cond_latents - latents_mean) * latents_recip_std
 
@@ -642,7 +629,6 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
             mask_len=prev_segment_cond_frames if start_frame > 0 else 0,
             mask_pixel_values=mask_pixel_values,
             dtype=dtype,
-            device=device,
         )
 
         # Prepend cond I2V mask to prev segment cond latents along channel dimension
@@ -656,25 +642,23 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
         sample_mode: int = "argmax",
         generator: Optional[Union[np.random.Generator, List[np.random.Generator]]] = None,
         dtype: Optional[ms.Type] = None,
-        device: Optional[ms.device] = None,
     ) -> ms.Tensor:
         # pose_video shape: (B, C, T, H, W)
-        pose_video = pose_video.to(device=device, dtype=dtype if dtype is not None else self.vae.dtype)
+        pose_video = pose_video.to(dtype=dtype if dtype is not None else self.vae.dtype)
         if isinstance(generator, list):
             pose_latents = [
-                retrieve_latents(self.vae, self.vae.encode(pose_video)[0], generator=g, sample_mode=sample_mode) for g in generator
+                retrieve_latents(self.vae, self.vae.encode(pose_video)[0], generator=g, sample_mode=sample_mode)
+                for g in generator
             ]
             pose_latents = mint.cat(pose_latents)
         else:
             pose_latents = retrieve_latents(self.vae, self.vae.encode(pose_video)[0], generator, sample_mode)
         # Standardize latents in preparation for Wan VAE encode
         latents_mean = (
-            ms.tensor(self.vae.config.latents_mean)
-            .view(1, self.vae.config.z_dim, 1, 1, 1)
-            .to(pose_latents.device, pose_latents.dtype)
+            ms.tensor(self.vae.config.latents_mean).view(1, self.vae.config.z_dim, 1, 1, 1).to(pose_latents.dtype)
         )
         latents_recip_std = 1.0 / ms.tensor(self.vae.config.latents_std).view(1, self.vae.config.z_dim, 1, 1, 1).to(
-            pose_latents.device, pose_latents.dtype
+            pose_latents.dtype
         )
         pose_latents = (pose_latents - latents_mean) * latents_recip_std
         if pose_latents.shape[0] == 1 and batch_size > 1:
@@ -689,7 +673,6 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
         width: int = 1280,
         num_frames: int = 77,
         dtype: Optional[ms.Type] = None,
-        device: Optional[ms.device] = None,
         generator: Optional[Union[np.random.Generator, List[np.random.Generator]]] = None,
         latents: Optional[ms.Tensor] = None,
     ) -> Tuple[ms.Tensor, ms.Tensor, ms.Tensor]:
@@ -705,9 +688,9 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
             )
 
         if latents is None:
-            latents = randn_tensor(shape, generator=generator, device=device, dtype=dtype)
+            latents = randn_tensor(shape, generator=generator, dtype=dtype)
         else:
-            latents = latents.to(device=device, dtype=dtype)
+            latents = latents.to(dtype=dtype)
 
         return latents
 
@@ -757,7 +740,6 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
         return self._attention_kwargs
 
     @ms._no_grad()
-    @replace_example_docstring(EXAMPLE_DOC_STRING)
     def __call__(
         self,
         image: PipelineImageInput,
@@ -926,8 +908,6 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
         self._current_timestep = None
         self._interrupt = False
 
-        device = self._execution_device
-
         # 2. Define call parameters
         if prompt is not None and isinstance(prompt, str):
             batch_size = 1
@@ -957,7 +937,6 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
             prompt_embeds=prompt_embeds,
             negative_prompt_embeds=negative_prompt_embeds,
             max_sequence_length=max_sequence_length,
-            device=device,
         )
 
         transformer_dtype = self.transformer.dtype
@@ -970,12 +949,12 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
         if image_height != height or image_width != width:
             logger.warning(f"Reshaping reference image from ({image_width}, {image_height}) to ({width}, {height})")
         image_pixels = self.vae_image_processor.preprocess(image, height=height, width=width, resize_mode="fill").to(
-            device, dtype=ms.float32
+            dtype=ms.float32
         )
 
         # Get CLIP features from the reference image
         if image_embeds is None:
-            image_embeds = self.encode_image(image, device)
+            image_embeds = self.encode_image(image)
         image_embeds = image_embeds.repeat(batch_size * num_videos_per_prompt, 1, 1)
         image_embeds = image_embeds.to(transformer_dtype)
 
@@ -989,9 +968,7 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
             logger.warning(
                 f"Reshaping pose video from ({pose_video_width}, {pose_video_height}) to ({width}, {height})"
             )
-        pose_video = self.video_processor.preprocess_video(pose_video, height=height, width=width).to(
-            device, dtype=ms.float32
-        )
+        pose_video = self.video_processor.preprocess_video(pose_video, height=height, width=width).to(dtype=ms.float32)
 
         face_video_width, face_video_height = face_video[0].size
         expected_face_size = self.transformer.config.motion_encoder_size
@@ -1002,21 +979,21 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
             )
         face_video = self.video_processor.preprocess_video(
             face_video, height=expected_face_size, width=expected_face_size
-        ).to(device, dtype=ms.float32)
+        ).to(dtype=ms.float32)
 
         if mode == "replace":
             background_video = self.pad_video_frames(background_video, num_target_frames)
             mask_video = self.pad_video_frames(mask_video, num_target_frames)
 
             background_video = self.video_processor.preprocess_video(background_video, height=height, width=width).to(
-                device, dtype=ms.float32
+                dtype=ms.float32
             )
             mask_video = self.video_processor_for_mask.preprocess_video(mask_video, height=height, width=width).to(
-                device, dtype=ms.float32
+                dtype=ms.float32
             )
 
         # 6. Prepare timesteps
-        self.scheduler.set_timesteps(num_inference_steps, device=device)
+        self.scheduler.set_timesteps(num_inference_steps)
         timesteps = self.scheduler.timesteps
 
         # 7. Prepare latent variables which stay constant for all inference segments
@@ -1024,7 +1001,7 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
         # Get VAE-encoded latents of the reference (character) image
         reference_image_latents = self.prepare_reference_image_latents(
-            image_pixels, batch_size * num_videos_per_prompt, generator=generator, device=device
+            image_pixels, batch_size * num_videos_per_prompt, generator=generator
         )
 
         # 8. Loop over video inference segments
@@ -1044,7 +1021,6 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 width=width,
                 num_frames=segment_frame_length,
                 dtype=ms.float32,
-                device=device,
                 generator=generator,
                 latents=latents if start == 0 else None,  # Only use pre-calculated latents for first segment
             )
@@ -1056,7 +1032,7 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
             face_video_segment = face_video_segment.to(dtype=transformer_dtype)
 
             if start > 0:
-                prev_segment_cond_video = out_frames[:, :, -prev_segment_conditioning_frames:].clone().detach()
+                prev_segment_cond_video = out_frames[:, :, -prev_segment_conditioning_frames:].clone()
             else:
                 prev_segment_cond_video = None
 
@@ -1073,7 +1049,7 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 mask_video_segment = None
 
             pose_latents = self.prepare_pose_latents(
-                pose_video_segment, batch_size * num_videos_per_prompt, generator=generator, device=device
+                pose_video_segment, batch_size * num_videos_per_prompt, generator=generator
             )
             pose_latents = pose_latents.to(dtype=transformer_dtype)
 
@@ -1089,7 +1065,6 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 prev_segment_cond_frames=prev_segment_conditioning_frames,
                 task=mode,
                 generator=generator,
-                device=device,
             )
 
             # Concatenate the reference latents in the frame dimension
@@ -1157,19 +1132,14 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
                         progress_bar.update()
 
-                    if XLA_AVAILABLE:
-                        xm.mark_step()
-
             latents = latents.to(self.vae.dtype)
             # Destandardize latents in preparation for Wan VAE decoding
             latents_mean = (
-                ms.tensor(self.vae.config.latents_mean)
-                .view(1, self.vae.config.z_dim, 1, 1, 1)
-                .to(latents.device, latents.dtype)
+                ms.tensor(self.vae.config.latents_mean).view(1, self.vae.config.z_dim, 1, 1, 1).to(latents.dtype)
             )
-            latents_recip_std = 1.0 / ms.tensor(self.vae.config.latents_std).view(
-                1, self.vae.config.z_dim, 1, 1, 1
-            ).to(latents.device, latents.dtype)
+            latents_recip_std = 1.0 / ms.tensor(self.vae.config.latents_std).view(1, self.vae.config.z_dim, 1, 1, 1).to(
+                latents.dtype
+            )
             latents = latents / latents_recip_std + latents_mean
             # Skip the first latent frame (used for conditioning)
             out_frames = self.vae.decode(latents[:, :, 1:], return_dict=False)[0]
@@ -1182,7 +1152,7 @@ class WanAnimatePipeline(DiffusionPipeline, WanLoraLoaderMixin):
             end += effective_segment_length
 
             # Reset scheduler timesteps / state for next denoising loop
-            self.scheduler.set_timesteps(num_inference_steps, device=device)
+            self.scheduler.set_timesteps(num_inference_steps)
             timesteps = self.scheduler.timesteps
 
         self._current_timestep = None

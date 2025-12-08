@@ -1651,12 +1651,12 @@ WANANIMATE_TRANSFORMER3D_CASES = [
         },
         (),
         {
-            "hidden_states": np.random.randn((1, 2 * 4 + 4, 20 + 1, 16, 16)),
+            "hidden_states": np.random.randn(1, 2 * 4 + 4, 20 + 1, 16, 16),
             "timestep": np.random.randint(0, 1000, size=(1,)),
-            "encoder_hidden_states": np.random.randn((1, 12, 16)),
-            "encoder_hidden_states_image": np.random.randn((1, 12, 16)),
-            "pose_hidden_states": np.random.randn((1, 4, 20, 16, 16)),
-            "face_pixel_values": np.random.randn((1, 3, 77, 16, 16)),
+            "encoder_hidden_states": np.random.randn(1, 12, 16),
+            "encoder_hidden_states_image": np.random.randn(1, 12, 16),
+            "pose_hidden_states": np.random.randn(1, 4, 20, 16, 16),
+            "face_pixel_values": np.random.randn(1, 3, 77, 16, 16),
         },
     ]
 ]

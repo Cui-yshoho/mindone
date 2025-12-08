@@ -60,6 +60,54 @@ _CLASS_REMAPPING_DICT = {
 }
 
 
+def _get_pt2ms_mappings(m):
+    mappings = {}  # pt_param_name: (ms_param_name, pt_param_to_ms_param_func)
+    for name, cell in m.cells_and_names():
+        if isinstance(cell, (nn.Conv1d, nn.Conv1dTranspose)):
+            mappings[f"{name}.weight"] = f"{name}.weight", lambda x: ms.Parameter(x.unsqueeze(dim=-2), name=x.name)
+            if "weight_norm_cell" in name:
+                ori_name = name.replace(".weight_norm_cell", "")
+                mappings[f"{ori_name}.weight_g"] = f"{ori_name}.weight_g", lambda x: ms.Parameter(
+                    x.unsqueeze(dim=-2), name=x.name
+                )
+                mappings[f"{ori_name}.weight_v"] = f"{ori_name}.weight_v", lambda x: ms.Parameter(
+                    x.unsqueeze(dim=-2), name=x.name
+                )
+                mappings[f"{ori_name}.bias"] = f"{name}.bias", lambda x: x
+        elif isinstance(cell, nn.Embedding):
+            mappings[f"{name}.weight"] = f"{name}.embedding_table", lambda x: x
+        elif isinstance(cell, (nn.BatchNorm1d, nn.BatchNorm2d, nn.LayerNorm, nn.GroupNorm)):
+            mappings[f"{name}.weight"] = f"{name}.gamma", lambda x: x
+            mappings[f"{name}.bias"] = f"{name}.beta", lambda x: x
+            if isinstance(
+                cell,
+                (
+                    nn.BatchNorm1d,
+                    nn.BatchNorm2d,
+                ),
+            ):
+                mappings[f"{name}.running_mean"] = f"{name}.moving_mean", lambda x: x
+                mappings[f"{name}.running_var"] = f"{name}.moving_variance", lambda x: x
+                mappings[f"{name}.num_batches_tracked"] = None, lambda x: x
+    return mappings
+
+
+def _convert_state_dict(m, state_dict_pt):
+    if not state_dict_pt:
+        return state_dict_pt
+    pt2ms_mappings = _get_pt2ms_mappings(m)
+    if not pt2ms_mappings:
+        return state_dict_pt
+    state_dict_ms = {}
+    while state_dict_pt:
+        name_pt, data_pt = state_dict_pt.popitem()
+        name_ms, data_mapping = pt2ms_mappings.get(name_pt, (name_pt, lambda x: x))
+        data_ms = data_mapping(data_pt)
+        if name_ms is not None:
+            state_dict_ms[name_ms] = data_ms
+    return state_dict_ms
+
+
 def _fetch_remapped_cls_from_config(config, old_class):
     previous_class_name = old_class.__name__
     remapped_class_name = _CLASS_REMAPPING_DICT.get(previous_class_name).get(config["norm_type"], None)
@@ -153,6 +201,7 @@ def _load_state_dict_into_model(
         else:
             pass  # unexpect key keeps origin dtype
     cm = silence_mindspore_logger() if is_sharded else nullcontext()
+    state_dict = _convert_state_dict(model_to_load, state_dict)
     with cm:
         ms.load_param_into_net(model_to_load, state_dict, strict_load=True)
     return error_msgs
