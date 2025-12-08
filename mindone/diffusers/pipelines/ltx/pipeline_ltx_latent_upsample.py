@@ -124,7 +124,7 @@ class LTXLatentUpsamplePipeline(DiffusionPipeline):
 
                 result[i, c] = ((result[i, c] - i_mean) / i_sd) * r_sd + r_mean
 
-        result = mint.lerp(latents, result, factor)
+        result = mint.lerp(latents, result, ms.tensor(factor, dtype=latents.dtype))
         return result
 
     def tone_map_latents(self, latents: ms.Tensor, compression: float) -> ms.Tensor:
