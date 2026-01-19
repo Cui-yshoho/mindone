@@ -1618,6 +1618,43 @@ CHROMA_TRANSFORMER2D_CASES = [
     ]
 ]
 
+
+SANAVIDEO_TRANSFORMER3D_CASES = [
+    [
+        "SanaVideoTransformer3DModel",
+        "diffusers.models.transformers.transformer_sana_video.SanaVideoTransformer3DModel",
+        "mindone.diffusers.models.transformers.transformer_sana_video.SanaVideoTransformer3DModel",
+        (),
+        {
+            "in_channels": 16,
+            "out_channels": 16,
+            "num_attention_heads": 2,
+            "attention_head_dim": 12,
+            "num_layers": 2,
+            "num_cross_attention_heads": 2,
+            "cross_attention_head_dim": 12,
+            "cross_attention_dim": 24,
+            "caption_channels": 16,
+            "mlp_ratio": 2.5,
+            "dropout": 0.0,
+            "attention_bias": False,
+            "sample_size": 8,
+            "patch_size": (1, 2, 2),
+            "norm_elementwise_affine": False,
+            "norm_eps": 1e-6,
+            "qk_norm": "rms_norm_across_heads",
+            "rope_max_seq_len": 32,
+        },
+        (),
+        {
+            "hidden_states": np.random.randn(1, 16, 2, 16, 16),
+            "encoder_hidden_states": np.random.randn(1, 12, 16),
+            "timestep": np.random.randint(0, 1000, size=(1,)),
+        },
+    ]
+]
+
+
 TRANSFORMERS_CASES = (
     ALLEGRO_TRANSFORMER3D_CASES
     + AURAFLOW_TRANSFORMER2D_CASES
@@ -1645,6 +1682,7 @@ TRANSFORMERS_CASES = (
     + LUMINA_NEXTDIT2D_CASES
     + LUMINA2_TRANSFORMER2D_CASES
     + CHROMA_TRANSFORMER2D_CASES
+    + SANAVIDEO_TRANSFORMER3D_CASES
 )
 
 

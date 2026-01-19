@@ -29,6 +29,7 @@ from ..embeddings import PixArtAlphaTextProjection, TimestepEmbedding, Timesteps
 from ..modeling_outputs import Transformer2DModelOutput
 from ..modeling_utils import ModelMixin
 from ..normalization import AdaLayerNormSingle, RMSNorm
+from ..layers_compat import unflatten
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -120,9 +121,9 @@ class SanaLinearAttnProcessor3_0:
         if attn.norm_k is not None:
             key = attn.norm_k(key)
 
-        query = query.unflatten(2, (attn.heads, -1))
-        key = key.unflatten(2, (attn.heads, -1))
-        value = value.unflatten(2, (attn.heads, -1))
+        query = unflatten(query, 2, (attn.heads, -1))
+        key = unflatten(key, 2, (attn.heads, -1))
+        value = unflatten(value, 2, (attn.heads, -1))
         # B,N,H,C
 
         query = mint.nn.functional.relu(query)
@@ -135,7 +136,7 @@ class SanaLinearAttnProcessor3_0:
                 freqs_cos: ms.Tensor,
                 freqs_sin: ms.Tensor,
             ):
-                x1, x2 = hidden_states.unflatten(-1, (-1, 2)).unbind(-1)
+                x1, x2 = unflatten(hidden_states, -1, (-1, 2)).unbind(-1)
                 cos = freqs_cos[..., 0::2]
                 sin = freqs_sin[..., 1::2]
                 out = mint.empty_like(hidden_states)
@@ -145,6 +146,9 @@ class SanaLinearAttnProcessor3_0:
 
             query_rotate = apply_rotary_emb(query, *rotary_emb)
             key_rotate = apply_rotary_emb(key, *rotary_emb)
+        else:
+            query_rotate = None
+            key_rotate = None
 
         # B,H,C,N
         query = query.permute(0, 2, 3, 1)
@@ -155,14 +159,14 @@ class SanaLinearAttnProcessor3_0:
 
         query_rotate, key_rotate, value = query_rotate.float(), key_rotate.float(), value.float()
 
-        z = 1 / (key.sum(dim=-1, keepdim=True).transpose(-2, -1) @ query + 1e-15)
+        z = 1 / (key.sum(dim=-1, keepdim=True).swapaxes(-2, -1) @ query + 1e-15)
 
-        scores = mint.matmul(value, key_rotate.transpose(-1, -2))
+        scores = mint.matmul(value, key_rotate.swapaxes(-1, -2))
         hidden_states = mint.matmul(scores, query_rotate)
 
         hidden_states = hidden_states * z
         # B,H,C,N
-        hidden_states = hidden_states.flatten(1, 2).transpose(1, 2)
+        hidden_states = hidden_states.flatten(1, 2).swapaxes(1, 2)
         hidden_states = hidden_states.to(original_dtype)
 
         hidden_states = attn.to_out[0](hidden_states)
@@ -171,7 +175,6 @@ class SanaLinearAttnProcessor3_0:
         return hidden_states
 
 
-# Copied from diffusers.models.transformers.transformer_wan.WanRotaryPosEmbed
 class WanRotaryPosEmbed(nn.Cell):
     def __init__(
         self,
@@ -188,6 +191,11 @@ class WanRotaryPosEmbed(nn.Cell):
 
         h_dim = w_dim = 2 * (attention_head_dim // 6)
         t_dim = attention_head_dim - h_dim - w_dim
+
+        self.t_dim = t_dim
+        self.h_dim = h_dim
+        self.w_dim = w_dim
+
         freqs_dtype = ms.float64
 
         freqs_cos = []
@@ -213,22 +221,18 @@ class WanRotaryPosEmbed(nn.Cell):
         p_t, p_h, p_w = self.patch_size
         ppf, pph, ppw = num_frames // p_t, height // p_h, width // p_w
 
-        split_sizes = [
-            self.attention_head_dim - 2 * (self.attention_head_dim // 3),
-            self.attention_head_dim // 3,
-            self.attention_head_dim // 3,
-        ]
+        split_sizes = [self.t_dim, self.h_dim, self.w_dim]
 
         freqs_cos = self.freqs_cos.split(split_sizes, dim=1)
         freqs_sin = self.freqs_sin.split(split_sizes, dim=1)
 
-        freqs_cos_f = freqs_cos[0][:ppf].view(ppf, 1, 1, -1).expand(ppf, pph, ppw, -1)
-        freqs_cos_h = freqs_cos[1][:pph].view(1, pph, 1, -1).expand(ppf, pph, ppw, -1)
-        freqs_cos_w = freqs_cos[2][:ppw].view(1, 1, ppw, -1).expand(ppf, pph, ppw, -1)
+        freqs_cos_f = freqs_cos[0][:ppf].view(ppf, 1, 1, -1).broadcast_to((ppf, pph, ppw, -1))
+        freqs_cos_h = freqs_cos[1][:pph].view(1, pph, 1, -1).broadcast_to((ppf, pph, ppw, -1))
+        freqs_cos_w = freqs_cos[2][:ppw].view(1, 1, ppw, -1).broadcast_to((ppf, pph, ppw, -1))
 
-        freqs_sin_f = freqs_sin[0][:ppf].view(ppf, 1, 1, -1).expand(ppf, pph, ppw, -1)
-        freqs_sin_h = freqs_sin[1][:pph].view(1, pph, 1, -1).expand(ppf, pph, ppw, -1)
-        freqs_sin_w = freqs_sin[2][:ppw].view(1, 1, ppw, -1).expand(ppf, pph, ppw, -1)
+        freqs_sin_f = freqs_sin[0][:ppf].view(ppf, 1, 1, -1).broadcast_to((ppf, pph, ppw, -1))
+        freqs_sin_h = freqs_sin[1][:pph].view(1, pph, 1, -1).broadcast_to((ppf, pph, ppw, -1))
+        freqs_sin_w = freqs_sin[2][:ppw].view(1, 1, ppw, -1).broadcast_to((ppf, pph, ppw, -1))
 
         freqs_cos = mint.cat([freqs_cos_f, freqs_cos_h, freqs_cos_w], dim=-1).reshape(1, ppf * pph * ppw, 1, -1)
         freqs_sin = mint.cat([freqs_sin_f, freqs_sin_h, freqs_sin_w], dim=-1).reshape(1, ppf * pph * ppw, 1, -1)
@@ -236,7 +240,6 @@ class WanRotaryPosEmbed(nn.Cell):
         return freqs_cos, freqs_sin
 
 
-# Copied from diffusers.models.transformers.sana_transformer.SanaModulatedNorm
 class SanaModulatedNorm(nn.Cell):
     def __init__(self, dim: int, elementwise_affine: bool = False, eps: float = 1e-6):
         super().__init__()
@@ -244,7 +247,7 @@ class SanaModulatedNorm(nn.Cell):
 
     def construct(self, hidden_states: ms.Tensor, temb: ms.Tensor, scale_shift_table: ms.Tensor) -> ms.Tensor:
         hidden_states = self.norm(hidden_states)
-        shift, scale = (scale_shift_table[None] + temb[:, None]).chunk(2, dim=1)
+        shift, scale = (scale_shift_table[None, None] + temb[:, :, None]).unbind(dim=2)
         hidden_states = hidden_states * (1 + scale) + shift
         return hidden_states
 
@@ -279,10 +282,6 @@ class SanaAttnProcessor2_0:
 
     _attention_backend = None
     _parallel_config = None
-
-    def __init__(self):
-        if not hasattr(F, "scaled_dot_product_attention"):
-            raise ImportError("SanaAttnProcessor2_0 requires PyTorch 2.0, to use it, please upgrade PyTorch to 2.0.")
 
     def __call__(
         self,
@@ -420,8 +419,8 @@ class SanaVideoTransformerBlock(nn.Cell):
 
         # 1. Modulation
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
-            self.scale_shift_table[None] + timestep.reshape(batch_size, 6, -1)
-        ).chunk(6, dim=1)
+            self.scale_shift_table[None, None] + timestep.reshape(batch_size, timestep.shape[1], 6, -1)
+        ).unbind(dim=2)
 
         # 2. Self Attention
         norm_hidden_states = self.norm1(hidden_states)
@@ -444,7 +443,7 @@ class SanaVideoTransformerBlock(nn.Cell):
         norm_hidden_states = self.norm2(hidden_states)
         norm_hidden_states = norm_hidden_states * (1 + scale_mlp) + shift_mlp
 
-        norm_hidden_states = norm_hidden_states.unflatten(1, (frames, height, width))
+        norm_hidden_states = unflatten(norm_hidden_states, 1, (frames, height, width))
         ff_output = self.ff(norm_hidden_states)
         ff_output = ff_output.flatten(1, 3)
         hidden_states = hidden_states + gate_mlp * ff_output
@@ -578,7 +577,7 @@ class SanaVideoTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, Fro
         attention_mask: Optional[ms.Tensor] = None,
         attention_kwargs: Optional[Dict[str, Any]] = None,
         controlnet_block_samples: Optional[Tuple[ms.Tensor]] = None,
-        return_dict: bool = True,
+        return_dict: bool = False,
     ) -> Union[Tuple[ms.Tensor, ...], Transformer2DModelOutput]:
         if attention_kwargs is not None and "scale" in attention_kwargs:
             # weight the lora layers by setting `lora_scale` for each PEFT layer here
@@ -617,7 +616,7 @@ class SanaVideoTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, Fro
 
         # 1. Input
         batch_size, num_channels, num_frames, height, width = hidden_states.shape
-        p_t, p_h, p_w = self.config.patch_size
+        p_t, p_h, p_w = self.config["patch_size"]
         post_patch_num_frames = num_frames // p_t
         post_patch_height = height // p_h
         post_patch_width = width // p_w
@@ -625,14 +624,19 @@ class SanaVideoTransformer3DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, Fro
         rotary_emb = self.rope(hidden_states)
 
         hidden_states = self.patch_embedding(hidden_states)
-        hidden_states = hidden_states.flatten(2).transpose(1, 2)
+        hidden_states = hidden_states.flatten(2).swapaxes(1, 2)
 
         if guidance is not None:
-            timestep, embedded_timestep = self.time_embed(timestep, guidance=guidance, hidden_dtype=hidden_states.dtype)
+            timestep, embedded_timestep = self.time_embed(
+                timestep.flatten(), guidance=guidance, hidden_dtype=hidden_states.dtype
+            )
         else:
             timestep, embedded_timestep = self.time_embed(
-                timestep, batch_size=batch_size, hidden_dtype=hidden_states.dtype
+                timestep.flatten(), batch_size=batch_size, hidden_dtype=hidden_states.dtype
             )
+
+        timestep = timestep.view(batch_size, -1, timestep.shape[-1])
+        embedded_timestep = embedded_timestep.view(batch_size, -1, embedded_timestep.shape[-1])
 
         encoder_hidden_states = self.caption_projection(encoder_hidden_states)
         encoder_hidden_states = encoder_hidden_states.view(batch_size, -1, hidden_states.shape[-1])

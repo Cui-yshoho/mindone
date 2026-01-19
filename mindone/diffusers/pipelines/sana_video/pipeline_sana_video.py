@@ -93,8 +93,8 @@ EXAMPLE_DOC_STRING = """
         >>> import numpy as np
 
         >>> pipe = SanaVideoPipeline.from_pretrained("Efficient-Large-Model/SANA-Video_2B_480p_diffusers")
-        >>> pipe.transformer.to(ms.float16)
-        >>> pipe.text_encoder.to(ms.float16)
+        >>> pipe.transformer.to(ms.bfloat16)
+        >>> pipe.text_encoder.to(ms.bfloat16)
         >>> pipe.vae.to(ms.float32)
         >>> motion_score = 30
 
