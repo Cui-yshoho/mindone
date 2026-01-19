@@ -82,7 +82,7 @@ EXAMPLE_DOC_STRING = """
         >>> negative_prompt = "A chaotic sequence with misshapen, deformed limbs in heavy motion blur, " \
                               "sudden disappearance, jump cuts, jerky movements, rapid shot changes, " \
                               "frames out of sync, inconsistent character shapes, temporal artifacts, " \
-                              "jitter, and ghosting effects, creating a disorienting visual experience." \
+                              "jitter, and ghosting effects, creating a disorienting visual experience."
         >>> motion_prompt = f" motion score: {motion_score}."
         >>> prompt = prompt + motion_prompt
         >>> image = load_image("https://raw.githubusercontent.com/NVlabs/Sana/refs/heads/main/asset/samples/i2v-1.png")
@@ -931,11 +931,13 @@ class SanaImageToVideoPipeline(DiffusionPipeline, SanaLoraLoaderMixin):
         )
 
         conditioning_mask = latents.new_zeros(
-            batch_size,
-            1,
-            latents.shape[2] // self.transformer_temporal_patch_size,
-            latents.shape[3] // self.transformer_spatial_patch_size,
-            latents.shape[4] // self.transformer_spatial_patch_size,
+            (
+                batch_size,
+                1,
+                latents.shape[2] // self.transformer_temporal_patch_size,
+                latents.shape[3] // self.transformer_spatial_patch_size,
+                latents.shape[4] // self.transformer_spatial_patch_size,
+            )
         )
         conditioning_mask[:, :, 0] = 1.0
         if self.do_classifier_free_guidance:

@@ -20,14 +20,19 @@ import functools
 import math
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import numpy as np
+
 import mindspore as ms
 from mindspore import mint, nn, ops
 
 from ...configuration_utils import ConfigMixin, register_to_config
 from ...loaders import FromOriginalModelMixin, PeftAdapterMixin
 from ...utils import logging
-from ..attention import FeedForward
+from .._modeling_parallel import ContextParallelInput, ContextParallelOutput
+from ..attention import AttentionMixin, FeedForward
+from ..attention_dispatch import dispatch_attention_fn
 from ..attention_processor import Attention
+from ..cache_utils import CacheMixin
 from ..embeddings import TimestepEmbedding, Timesteps
 from ..layers_compat import unflatten, view_as_complex
 from ..modeling_outputs import Transformer2DModelOutput
@@ -109,31 +114,32 @@ def apply_rotary_emb_qwen(
     Returns:
         Tuple[ms.Tensor, ms.Tensor]: Tuple of modified query tensor and key tensor with rotary embeddings.
     """
-    if use_real:
-        cos, sin = freqs_cis  # [S, D]
-        cos = cos[None, None]
-        sin = sin[None, None]
+    with ms._no_grad():  # to support training
+        if use_real:
+            cos, sin = freqs_cis  # [S, D]
+            cos = cos[None, None]
+            sin = sin[None, None]
 
-        if use_real_unbind_dim == -1:
-            # Used for flux, cogvideox, hunyuan-dit
-            x_real, x_imag = x.reshape(*x.shape[:-1], -1, 2).unbind(-1)  # [B, S, H, D//2]
-            x_rotated = mint.stack([-x_imag, x_real], dim=-1).flatten(3)
-        elif use_real_unbind_dim == -2:
-            # Used for Stable Audio, OmniGen, CogView4 and Cosmos
-            x_real, x_imag = x.reshape(*x.shape[:-1], 2, -1).unbind(-2)  # [B, S, H, D//2]
-            x_rotated = mint.cat([-x_imag, x_real], dim=-1)
+            if use_real_unbind_dim == -1:
+                # Used for flux, cogvideox, hunyuan-dit
+                x_real, x_imag = x.reshape(*x.shape[:-1], -1, 2).unbind(-1)  # [B, S, H, D//2]
+                x_rotated = mint.stack([-x_imag, x_real], dim=-1).flatten(3)
+            elif use_real_unbind_dim == -2:
+                # Used for Stable Audio, OmniGen, CogView4 and Cosmos
+                x_real, x_imag = x.reshape(*x.shape[:-1], 2, -1).unbind(-2)  # [B, S, H, D//2]
+                x_rotated = mint.cat([-x_imag, x_real], dim=-1)
+            else:
+                raise ValueError(f"`use_real_unbind_dim={use_real_unbind_dim}` but should be -1 or -2.")
+
+            out = (x.float() * cos + x_rotated.float() * sin).to(x.dtype)
+
+            return out
         else:
-            raise ValueError(f"`use_real_unbind_dim={use_real_unbind_dim}` but should be -1 or -2.")
+            x_rotated = view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))
+            freqs_cis = freqs_cis.unsqueeze(1)
+            x_out = ops.view_as_real(x_rotated * freqs_cis).flatten(3)
 
-        out = (x.float() * cos + x_rotated.float() * sin).to(x.dtype)
-
-        return out
-    else:
-        x_rotated = view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))
-        freqs_cis = freqs_cis.unsqueeze(1)
-        x_out = ops.view_as_real(x_rotated * freqs_cis).flatten(3)
-
-        return x_out.type_as(x)
+            return x_out.type_as(x)
 
 
 class QwenTimestepProjEmbeddings(nn.Cell):
@@ -246,6 +252,7 @@ class QwenDoubleStreamAttnProcessor2_0:
     """
 
     _attention_backend = None
+    _parallel_config = None
 
     def __call__(
         self,
@@ -305,12 +312,16 @@ class QwenDoubleStreamAttnProcessor2_0:
         joint_value = mint.cat([txt_value, img_value], dim=1)
 
         # Compute joint attention
-        # TODO: function dispatch_attention_fn.py
-        joint_query, joint_key, joint_value = (x.permute(0, 2, 1, 3) for x in (joint_query, joint_key, joint_value))
-        joint_hidden_states = attn.scaled_dot_product_attention(
-            joint_query, joint_key, joint_value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
+        joint_hidden_states = dispatch_attention_fn(
+            joint_query,
+            joint_key,
+            joint_value,
+            attn_mask=attention_mask,
+            dropout_p=0.0,
+            is_causal=False,
+            backend=self._attention_backend,
+            parallel_config=self._parallel_config,
         )
-        joint_hidden_states = joint_hidden_states.permute(0, 2, 1, 3)
 
         # Reshape back
         joint_hidden_states = joint_hidden_states.flatten(2, 3)
@@ -330,7 +341,6 @@ class QwenDoubleStreamAttnProcessor2_0:
         return img_attn_output, txt_attn_output
 
 
-# @jit_class
 class QwenImageTransformerBlock(nn.Cell):
     def __init__(
         self, dim: int, num_attention_heads: int, attention_head_dim: int, qk_norm: str = "rms_norm", eps: float = 1e-6
@@ -446,7 +456,9 @@ class QwenImageTransformerBlock(nn.Cell):
         return encoder_hidden_states, hidden_states
 
 
-class QwenImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMixin):
+class QwenImageTransformer2DModel(
+    ModelMixin, ConfigMixin, PeftAdapterMixin, FromOriginalModelMixin, CacheMixin, AttentionMixin
+):
     """
     The Transformer model introduced in Qwen.
 
@@ -476,6 +488,18 @@ class QwenImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, Fro
     _no_split_modules = ["QwenImageTransformerBlock"]
     _skip_layerwise_casting_patterns = ["pos_embed", "norm"]
     _repeated_blocks = ["QwenImageTransformerBlock"]
+    _cp_plan = {
+        "": {
+            "hidden_states": ContextParallelInput(split_dim=1, expected_dims=3, split_output=False),
+            "encoder_hidden_states": ContextParallelInput(split_dim=1, expected_dims=3, split_output=False),
+            "encoder_hidden_states_mask": ContextParallelInput(split_dim=1, expected_dims=2, split_output=False),
+        },
+        "pos_embed": {
+            0: ContextParallelInput(split_dim=0, expected_dims=2, split_output=True),
+            1: ContextParallelInput(split_dim=0, expected_dims=2, split_output=True),
+        },
+        "proj_out": ContextParallelOutput(gather_dim=1, expected_dims=3),
+    }
 
     @register_to_config
     def __init__(
@@ -529,7 +553,7 @@ class QwenImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, Fro
         txt_seq_lens: Optional[List[int]] = None,
         guidance: ms.Tensor = None,  # TODO: this should probably be removed
         attention_kwargs: Optional[Dict[str, Any]] = None,
-        controlnet_block_samples=None,
+        controlnet_block_samples: ms.Tensor = None,
         return_dict: bool = True,
     ) -> Union[ms.Tensor, Transformer2DModelOutput]:
         """
@@ -586,19 +610,30 @@ class QwenImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, Fro
         image_rotary_emb = self.pos_embed(img_shapes, txt_seq_lens)
 
         for index_block, block in enumerate(self.transformer_blocks):
-            encoder_hidden_states, hidden_states = block(
-                hidden_states=hidden_states,
-                encoder_hidden_states=encoder_hidden_states,
-                encoder_hidden_states_mask=encoder_hidden_states_mask,
-                temb=temb,
-                image_rotary_emb=image_rotary_emb,
-                joint_attention_kwargs=attention_kwargs,
-            )
+            if self.gradient_checkpointing and self.training:
+                encoder_hidden_states, hidden_states = ms.recompute(
+                    block,
+                    hidden_states,
+                    encoder_hidden_states,
+                    encoder_hidden_states_mask,
+                    temb,
+                    image_rotary_emb,
+                    attention_kwargs,
+                )
+            else:
+                encoder_hidden_states, hidden_states = block(
+                    hidden_states=hidden_states,
+                    encoder_hidden_states=encoder_hidden_states,
+                    encoder_hidden_states_mask=encoder_hidden_states_mask,
+                    temb=temb,
+                    image_rotary_emb=image_rotary_emb,
+                    joint_attention_kwargs=attention_kwargs,
+                )
 
             # controlnet residual
             if controlnet_block_samples is not None:
                 interval_control = len(self.transformer_blocks) / len(controlnet_block_samples)
-                interval_control = int(mint.ceil(interval_control))
+                interval_control = int(np.ceil(interval_control))
                 hidden_states = hidden_states + controlnet_block_samples[index_block // interval_control]
 
         # Use only the image part (hidden_states) from the dual-stream blocks

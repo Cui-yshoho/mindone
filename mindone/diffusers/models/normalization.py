@@ -267,8 +267,8 @@ class AdaLayerNormSingle(nn.Cell):
         timestep: ms.Tensor,
         added_cond_kwargs: Optional[Dict[str, ms.Tensor]] = None,
         batch_size: Optional[int] = None,
-        hidden_dtype=None,
-    ) -> Tuple[ms.Tensor, ms.Tensor]:
+        hidden_dtype: Optional[ms.Type] = None,
+    ) -> Tuple[ms.Tensor, ms.Tensor, ms.Tensor, ms.Tensor, ms.Tensor]:
         # No modulation happening here.
         added_cond_kwargs = added_cond_kwargs or {"resolution": None, "aspect_ratio": None}
         embedded_timestep = self.emb(timestep, **added_cond_kwargs, batch_size=batch_size, hidden_dtype=hidden_dtype)

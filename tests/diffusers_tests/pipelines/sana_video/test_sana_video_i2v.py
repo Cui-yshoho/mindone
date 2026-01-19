@@ -25,8 +25,6 @@ from transformers import Gemma2Config
 
 import mindspore as ms
 
-from mindone.diffusers import SanaImageToVideoPipeline
-
 from ..pipeline_test_utils import (
     THRESHOLD_FP16,
     THRESHOLD_FP32,
@@ -157,8 +155,10 @@ class SanaImageToVideoPipelineFastTests(PipelineTesterMixin, unittest.TestCase):
     @unpack
     def test_inference(self, mode, dtype):
         pt_components, ms_components = self.get_dummy_components()
-        pt_pipe_cls = get_module("diffusers.pipelines.sana_video.pipeline_sana_image_to_video.SanaImageToVideoPipeline")
-        ms_pipe_cls = get_module("mindone.diffusers.pipelines.sana_video.pipeline_sana_image_to_video.SanaImageToVideoPipeline")
+        pt_pipe_cls = get_module("diffusers.pipelines.sana_video.pipeline_sana_video_i2v.SanaImageToVideoPipeline")
+        ms_pipe_cls = get_module(
+            "mindone.diffusers.pipelines.sana_video.pipeline_sana_video_i2v.SanaImageToVideoPipeline"
+        )
 
         pt_pipe = pt_pipe_cls(**pt_components)
         ms_pipe = ms_pipe_cls(**ms_components)
@@ -192,8 +192,6 @@ class SanaImageToVideoPipelineIntegrationTests(unittest.TestCase):
     @data(*test_cases)
     @unpack
     def test_inference(self, mode, dtype):
-        ms_dtype = getattr(ms, dtype)
-
         # TODO: Implement integration test with pretrained model when available
         # For now, skip this test
         self.skipTest("Integration test needs to be implemented with pretrained model")

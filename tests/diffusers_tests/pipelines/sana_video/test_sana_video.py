@@ -24,8 +24,6 @@ from transformers import Gemma2Config
 
 import mindspore as ms
 
-from mindone.diffusers import SanaVideoPipeline
-
 from ..pipeline_test_utils import (
     THRESHOLD_FP16,
     THRESHOLD_FP32,
@@ -188,8 +186,6 @@ class SanaVideoPipelineIntegrationTests(unittest.TestCase):
     @data(*test_cases)
     @unpack
     def test_inference(self, mode, dtype):
-        ms_dtype = getattr(ms, dtype)
-
         # TODO: Implement integration test with pretrained model when available
         # For now, skip this test
         self.skipTest("Integration test needs to be implemented with pretrained model")

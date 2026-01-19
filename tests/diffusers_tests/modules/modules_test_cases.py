@@ -25,8 +25,10 @@
 
 
 import numpy as np
+import torch
 
 np.random.seed(42)
+torch.manual_seed(42)
 
 # layers
 NORMALIZATION_CASES = [
@@ -1481,6 +1483,10 @@ LATTE_TRANSORMER3D_CASES = [
             "enable_temporal_attentions": True,
         },
     ],
+]
+
+
+WANVACE_TRANSFORMER3D_CASES = [
     [
         "WanVACETransformer3DModel",
         "diffusers.models.transformers.transformer_wan_vace.WanVACETransformer3DModel",
@@ -1655,6 +1661,43 @@ SANAVIDEO_TRANSFORMER3D_CASES = [
 ]
 
 
+FLUX2_TRANSFORMER2D_CASES = [
+    [
+        "Flux2Transformer2DModel",
+        "diffusers.models.transformers.transformer_flux2.Flux2Transformer2DModel",
+        "mindone.diffusers.models.transformers.transformer_flux2.Flux2Transformer2DModel",
+        (),
+        {
+            "patch_size": 1,
+            "in_channels": 4,
+            "num_layers": 1,
+            "num_single_layers": 1,
+            "attention_head_dim": 16,
+            "num_attention_heads": 2,
+            "joint_attention_dim": 32,
+            "timestep_guidance_channels": 256,  # Hardcoded in original code
+            "axes_dims_rope": [4, 4, 4, 4],
+        },
+        (),
+        {
+            "hidden_states": torch.randn((1, 16, 4)).numpy(),
+            "encoder_hidden_states": torch.randn((1, 48, 32)).numpy(),
+            "img_ids": torch.cartesian_prod(torch.arange(1), torch.arange(4), torch.arange(4), torch.arange(1))
+            .unsqueeze(0)
+            .expand(1, -1, -1)
+            .numpy(),
+            "txt_ids": torch.cartesian_prod(torch.arange(1), torch.arange(1), torch.arange(1), torch.arange(48))
+            .unsqueeze(0)
+            .expand(1, -1, -1)
+            .numpy(),
+            "timestep": torch.tensor([1.0]).expand(1).numpy(),
+            "guidance": torch.tensor([1.0]).expand(1).numpy(),
+            "return_dict": False,
+        },
+    ]
+]
+
+
 TRANSFORMERS_CASES = (
     ALLEGRO_TRANSFORMER3D_CASES
     + AURAFLOW_TRANSFORMER2D_CASES
@@ -1679,10 +1722,12 @@ TRANSFORMERS_CASES = (
     + TRANSFORMER2D_CASES
     + FLUX_TRANSFORMER2D_CASES
     + LATTE_TRANSORMER3D_CASES
+    + WANVACE_TRANSFORMER3D_CASES
     + LUMINA_NEXTDIT2D_CASES
     + LUMINA2_TRANSFORMER2D_CASES
     + CHROMA_TRANSFORMER2D_CASES
     + SANAVIDEO_TRANSFORMER3D_CASES
+    + FLUX2_TRANSFORMER2D_CASES
 )
 
 

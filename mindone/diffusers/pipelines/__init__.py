@@ -101,6 +101,7 @@ _import_structure = {
         "FluxKontextPipeline",
         "FluxKontextInpaintPipeline",
     ],
+    "flux2": ["Flux2Pipeline"],
     "hidream_image": ["HiDreamImagePipeline"],
     "hunyuandit": ["HunyuanDiTPipeline"],
     "hunyuan_video": [
@@ -186,11 +187,14 @@ _import_structure = {
         "PixArtSigmaPipeline",
     ],
     "qwenimage": [
-        "QwenImageEditPipeline",
-        "QwenImageEditInpaintPipeline",
+        "QwenImagePipeline",
         "QwenImageImg2ImgPipeline",
         "QwenImageInpaintPipeline",
-        "QwenImagePipeline",
+        "QwenImageEditPipeline",
+        "QwenImageEditPlusPipeline",
+        "QwenImageEditInpaintPipeline",
+        "QwenImageControlNetInpaintPipeline",
+        "QwenImageControlNetPipeline",
     ],
     "sana": ["SanaPipeline", "SanaSprintPipeline", "SanaControlNetPipeline", "SanaSprintImg2ImgPipeline"],
     "sana_video": ["SanaVideoPipeline", "SanaImageToVideoPipeline"],
@@ -356,6 +360,7 @@ if TYPE_CHECKING:
         FluxPriorReduxPipeline,
         ReduxImageEncoder,
     )
+    from .flux2 import Flux2Pipeline
     from .hidream_image import HiDreamImagePipeline
     from .hunyuan_video import (
         HunyuanSkyreelsImageToVideoPipeline,
@@ -430,8 +435,11 @@ if TYPE_CHECKING:
     from .pipeline_utils import AudioPipelineOutput, DiffusionPipeline, ImagePipelineOutput, StableDiffusionMixin
     from .pixart_alpha import PixArtAlphaPipeline, PixArtSigmaPipeline
     from .qwenimage import (
+        QwenImageControlNetInpaintPipeline,
+        QwenImageControlNetPipeline,
         QwenImageEditInpaintPipeline,
         QwenImageEditPipeline,
+        QwenImageEditPlusPipeline,
         QwenImageImg2ImgPipeline,
         QwenImageInpaintPipeline,
         QwenImagePipeline,

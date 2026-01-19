@@ -16,7 +16,6 @@ import math
 from typing import Any, Dict, Optional, Tuple, Union
 
 import mindspore as ms
-import mindspore.mint.nn.functional as F
 from mindspore import mint, nn
 
 from ...configuration_utils import ConfigMixin, register_to_config
@@ -26,10 +25,10 @@ from ..attention import AttentionMixin
 from ..attention_dispatch import dispatch_attention_fn
 from ..attention_processor import Attention
 from ..embeddings import PixArtAlphaTextProjection, TimestepEmbedding, Timesteps, get_1d_rotary_pos_embed
+from ..layers_compat import unflatten
 from ..modeling_outputs import Transformer2DModelOutput
 from ..modeling_utils import ModelMixin
 from ..normalization import AdaLayerNormSingle, RMSNorm
-from ..layers_compat import unflatten
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -140,8 +139,10 @@ class SanaLinearAttnProcessor3_0:
                 cos = freqs_cos[..., 0::2]
                 sin = freqs_sin[..., 1::2]
                 out = mint.empty_like(hidden_states)
-                out[..., 0::2] = x1 * cos - x2 * sin
-                out[..., 1::2] = x1 * sin + x2 * cos
+                # out[..., 0::2] = x1 * cos - x2 * sin
+                # out[..., 1::2] = x1 * sin + x2 * cos
+                tmp = mint.stack([x1 * cos - x2 * sin, x1 * sin + x2 * cos], dim=-1)
+                out = tmp.reshape(tmp.shape[:-2] + (tmp.shape[-2] * tmp.shape[-1],))
                 return out.type_as(hidden_states)
 
             query_rotate = apply_rotary_emb(query, *rotary_emb)

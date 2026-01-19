@@ -2189,6 +2189,7 @@ class GLIGENTextBoundingboxProjection(nn.Cell):
 class PixArtAlphaCombinedTimestepSizeEmbeddings(nn.Cell):
     """
     For PixArt-Alpha.
+
     Reference:
     https://github.com/PixArt-alpha/PixArt-alpha/blob/0f55e922376d8b797edd44d25d0e7464b260dcab/diffusion/model/nets/PixArtMS.py#L164C9-L168C29
     """
@@ -2208,7 +2209,6 @@ class PixArtAlphaCombinedTimestepSizeEmbeddings(nn.Cell):
 
     def construct(self, timestep, resolution, aspect_ratio, batch_size, hidden_dtype):
         timesteps_proj = self.time_proj(timestep)
-        hidden_dtype = hidden_dtype or timesteps_proj.dtype
         timesteps_emb = self.timestep_embedder(timesteps_proj.to(dtype=hidden_dtype))  # (N, D)
 
         if self.use_additional_conditions:
@@ -2617,19 +2617,22 @@ class MultiIPAdapterImageProjection(nn.Cell):
     def construct(self, image_embeds: List[ms.Tensor]):
         projected_image_embeds = []
 
-        # currently, we accept `image_embeds` as 1. a tensor (deprecated) with shape [batch_size, embed_dim] or [
-        # batch_size, sequence_length, embed_dim] 2. list of `n` tensors where `n` is number of ip-adapters,
-        # each tensor can hae shape [batch_size, num_images, embed_dim] or [batch_size, num_images, sequence_length,
-        # embed_dim]
+        # currently, we accept `image_embeds` as
+        #  1. a tensor (deprecated) with shape [batch_size, embed_dim] or [batch_size, sequence_length, embed_dim]
+        #  2. list of `n` tensors where `n` is number of ip-adapters, each tensor can hae shape [batch_size, num_images, embed_dim]
+        # or [batch_size, num_images, sequence_length, embed_dim]
         if not isinstance(image_embeds, list):
+            deprecation_message = (
+                "You have passed a tensor as `image_embeds`.This is deprecated and will be removed in a future release."
+                " Please make sure to update your script to pass `image_embeds` as a list of tensors to suppress this warning."
+            )
+            deprecate("image_embeds not a list", "1.0.0", deprecation_message, standard_warn=False)
             image_embeds = [image_embeds.unsqueeze(1)]
 
-        assert len(image_embeds) == len(self.image_projection_layers), (
-            f"image_embeds must have the same length as "
-            f"image_projection_layers, "
-            f"got {len(image_embeds)} and "
-            f"{len(self.image_projection_layers)}"
-        )
+        if len(image_embeds) != len(self.image_projection_layers):
+            raise ValueError(
+                f"image_embeds must have the same length as image_projection_layers, got {len(image_embeds)} and {len(self.image_projection_layers)}"
+            )
 
         for image_embed, image_projection_layer in zip(image_embeds, self.image_projection_layers):
             batch_size, num_images = image_embed.shape[0], image_embed.shape[1]

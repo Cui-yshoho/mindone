@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 from ..utils import _LazyModule
 
 _import_structure = {
+    "_modeling_parallel": ["ContextParallelConfig", "ParallelConfig"],
     "adapter": ["MultiAdapter", "T2IAdapter"],
     "auto_model": ["AutoModel"],
     "autoencoders.autoencoder_asym_kl": ["AsymmetricAutoencoderKL"],
@@ -28,6 +29,7 @@ _import_structure = {
     "autoencoders.autoencoder_kl_allegro": ["AutoencoderKLAllegro"],
     "autoencoders.autoencoder_kl_cogvideox": ["AutoencoderKLCogVideoX"],
     "autoencoders.autoencoder_kl_cosmos": ["AutoencoderKLCosmos"],
+    "autoencoders.autoencoder_kl_flux2": ["AutoencoderKLFlux2"],
     "autoencoders.autoencoder_kl_hunyuan_video": ["AutoencoderKLHunyuanVideo"],
     "autoencoders.autoencoder_kl_ltx": ["AutoencoderKLLTXVideo"],
     "autoencoders.autoencoder_kl_magvit": ["AutoencoderKLMagvit"],
@@ -46,6 +48,7 @@ _import_structure = {
         "HunyuanDiT2DControlNetModel",
         "HunyuanDiT2DMultiControlNetModel",
     ],
+    "controlnets.controlnet_qwenimage": ["QwenImageControlNetModel", "QwenImageMultiControlNetModel"],
     "controlnets.controlnet_sana": ["SanaControlNetModel"],
     "controlnets.controlnet_sd3": ["SD3ControlNetModel", "SD3MultiControlNetModel"],
     "controlnets.controlnet_sparsectrl": ["SparseControlNetModel"],
@@ -77,6 +80,7 @@ _import_structure = {
     "transformers.transformer_cosmos": ["CosmosTransformer3DModel"],
     "transformers.transformer_easyanimate": ["EasyAnimateTransformer3DModel"],
     "transformers.transformer_flux": ["FluxTransformer2DModel"],
+    "transformers.transformer_flux2": ["Flux2Transformer2DModel"],
     "transformers.transformer_hidream_image": ["HiDreamImageTransformer2DModel"],
     "transformers.transformer_hunyuan_video": ["HunyuanVideoTransformer3DModel"],
     "transformers.transformer_hunyuan_video_framepack": ["HunyuanVideoFramepackTransformer3DModel"],
@@ -105,6 +109,7 @@ _import_structure = {
 }
 
 if TYPE_CHECKING:
+    from ._modeling_parallel import ContextParallelConfig, ParallelConfig
     from .adapter import MultiAdapter, T2IAdapter
     from .auto_model import AutoModel
     from .autoencoders import (
@@ -114,6 +119,7 @@ if TYPE_CHECKING:
         AutoencoderKLAllegro,
         AutoencoderKLCogVideoX,
         AutoencoderKLCosmos,
+        AutoencoderKLFlux2,
         AutoencoderKLHunyuanVideo,
         AutoencoderKLLTXVideo,
         AutoencoderKLMagvit,
@@ -158,6 +164,7 @@ if TYPE_CHECKING:
         DiTTransformer2DModel,
         DualTransformer2DModel,
         EasyAnimateTransformer3DModel,
+        Flux2Transformer2DModel,
         FluxTransformer2DModel,
         HiDreamImageTransformer2DModel,
         HunyuanDiT2DModel,
