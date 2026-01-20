@@ -441,7 +441,7 @@ class PeftAdapterMixin:
 
         pipeline = AutoPipelineForText2Image.from_pretrained(
             "stabilityai/stable-diffusion-xl-base-1.0", mindspore_dtype=mindspore.float16
-        ).to("cuda")
+        )
         pipeline.load_lora_weights(
             "jbilcke-hf/sdxl-cinematic-1", weight_name="pytorch_lora_weights.safetensors", adapter_name="cinematic"
         )
@@ -673,7 +673,7 @@ class PeftAdapterMixin:
 
         pipeline = AutoPipelineForText2Image.from_pretrained(
             "stabilityai/stable-diffusion-xl-base-1.0", mindspore_dtype=mindspore.float16
-        ).to("cuda")
+        )
         pipeline.load_lora_weights(
             "jbilcke-hf/sdxl-cinematic-1", weight_name="pytorch_lora_weights.safetensors", adapter_name="cinematic"
         )
@@ -698,7 +698,7 @@ class PeftAdapterMixin:
 
         pipeline = AutoPipelineForText2Image.from_pretrained(
             "stabilityai/stable-diffusion-xl-base-1.0", mindspore_dtype=mindspore.float16
-        ).to("cuda")
+        )
         pipeline.load_lora_weights(
             "jbilcke-hf/sdxl-cinematic-1", weight_name="pytorch_lora_weights.safetensors", adapter_names="cinematic"
         )
