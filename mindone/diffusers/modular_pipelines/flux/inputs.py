@@ -15,7 +15,6 @@
 from typing import List
 
 import mindspore as ms
-from mindspore import mint
 
 from ...pipelines import FluxPipeline
 from ...utils import logging

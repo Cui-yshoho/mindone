@@ -15,6 +15,7 @@
 from typing import Any, List, Tuple
 
 import mindspore as ms
+from mindspore import mint
 
 from ...models import FluxTransformer2DModel
 from ...schedulers import FlowMatchEulerDiscreteScheduler

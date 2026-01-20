@@ -16,8 +16,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Dict, Union
-
 from mindspore import mint, nn
 
 from ...configuration_utils import ConfigMixin, register_to_config

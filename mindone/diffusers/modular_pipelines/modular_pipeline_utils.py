@@ -272,7 +272,7 @@ class ComponentSpec:
         pretrained_model_name_or_path = load_kwargs.pop("pretrained_model_name_or_path", None)
         if pretrained_model_name_or_path is None:
             raise ValueError(
-                "`pretrained_model_name_or_path` info is required when using `load` method (you can directly set it in `pretrained_model_name_or_path` field of the ComponentSpec or pass it as an argument)"
+                "`pretrained_model_name_or_path` info is required when using `load` method (you can directly set it in `pretrained_model_name_or_path` field of the ComponentSpec or pass it as an argument)"  # noqa: E501
             )
         is_single_file = _is_single_file_path_or_url(pretrained_model_name_or_path)
         if is_single_file and self.type_hint is None:

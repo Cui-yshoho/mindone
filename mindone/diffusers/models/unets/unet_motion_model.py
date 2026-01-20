@@ -31,10 +31,8 @@ from ..attention_processor import (
     Attention,
     AttnAddedKVProcessor,
     AttnProcessor,
-    AttnProcessor2_0,
     FusedAttnProcessor2_0,
     IPAdapterAttnProcessor,
-    IPAdapterAttnProcessor2_0,
 )
 from ..embeddings import TimestepEmbedding, Timesteps
 from ..modeling_utils import ModelMixin

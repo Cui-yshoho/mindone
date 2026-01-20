@@ -498,7 +498,7 @@ class WanVaeImageEncoderStep(ModularPipelineBlocks):
             block_state.num_frames < 1 or (block_state.num_frames - 1) % components.vae_scale_factor_temporal != 0
         ):
             raise ValueError(
-                f"`num_frames` has to be greater than 0, and (num_frames - 1) must be divisible by {components.vae_scale_factor_temporal}, but got {block_state.num_frames}."
+                f"`num_frames` has to be greater than 0, and (num_frames - 1) must be divisible by {components.vae_scale_factor_temporal}, but got {block_state.num_frames}."  # noqa: E501
             )
 
     def __call__(self, components: WanModularPipeline, state: PipelineState) -> PipelineState:
@@ -590,7 +590,7 @@ class WanFirstLastFrameVaeImageEncoderStep(ModularPipelineBlocks):
             block_state.num_frames < 1 or (block_state.num_frames - 1) % components.vae_scale_factor_temporal != 0
         ):
             raise ValueError(
-                f"`num_frames` has to be greater than 0, and (num_frames - 1) must be divisible by {components.vae_scale_factor_temporal}, but got {block_state.num_frames}."
+                f"`num_frames` has to be greater than 0, and (num_frames - 1) must be divisible by {components.vae_scale_factor_temporal}, but got {block_state.num_frames}."  # noqa: E501
             )
 
     def __call__(self, components: WanModularPipeline, state: PipelineState) -> PipelineState:

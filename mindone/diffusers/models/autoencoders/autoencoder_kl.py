@@ -19,21 +19,14 @@ from typing import Optional, Tuple, Union
 import numpy as np
 
 import mindspore as ms
-from mindspore import mint, nn
+from mindspore import mint
 
 from ...configuration_utils import ConfigMixin, register_to_config
 from ...loaders import PeftAdapterMixin
 from ...loaders.single_file_model import FromOriginalModelMixin
 from ...utils import deprecate
 from ..attention import AttentionMixin
-from ..attention_processor import (
-    ADDED_KV_ATTENTION_PROCESSORS,
-    CROSS_ATTENTION_PROCESSORS,
-    Attention,
-    AttnAddedKVProcessor,
-    AttnProcessor,
-    FusedAttnProcessor2_0,
-)
+from ..attention_processor import CROSS_ATTENTION_PROCESSORS, Attention, AttnProcessor, FusedAttnProcessor2_0
 from ..modeling_outputs import AutoencoderKLOutput
 from ..modeling_utils import ModelMixin
 from .vae import AutoencoderMixin, Decoder, DecoderOutput, DiagonalGaussianDistribution, Encoder

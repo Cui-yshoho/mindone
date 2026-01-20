@@ -182,7 +182,8 @@ class Kandinsky5I2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
                 "Describe how the camera moves or shakes, describe the zoom and view angle, whether it follows the objects.",
                 "Describe the location of the video, main characters or objects and their action.",
                 "Describe the dynamism of the video and presented actions.",
-                "Name the visual style of the video: whether it is a professional footage, user generated content, some kind of animation, video game or scren content.",
+                "Name the visual style of the video: whether it is a professional footage, user generated content,
+                "some kind of animation, video game or scren content.",
                 "Describe the visual effects, postprocessing and transitions if they are presented in the video.",
                 "Pay attention to the order of key actions shown in the scene.<|im_end|>",
                 "<|im_start|>user\n{}<|im_end|>",
@@ -233,7 +234,7 @@ class Kandinsky5I2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
         Returns:
             ms.Tensor: Sparse attention mask of shape (T*H*W, T*H*W)
         """
-        l = ms.tensor([T, H, W]).amax()
+        l = ms.tensor([T, H, W]).amax() # noqa: E741
         r = mint.arange(0, l, 1, dtype=ms.int16)
         mat = (r.unsqueeze(1) - r.unsqueeze(0)).abs()
         sta_t, sta_h, sta_w = (
@@ -570,7 +571,7 @@ class Kandinsky5I2VPipeline(DiffusionPipeline, KandinskyLoraLoaderMixin):
             k in self._callback_tensor_inputs for k in callback_on_step_end_tensor_inputs
         ):
             raise ValueError(
-                f"`callback_on_step_end_tensor_inputs` has to be in {self._callback_tensor_inputs}, but found {[k for k in callback_on_step_end_tensor_inputs if k not in self._callback_tensor_inputs]}"
+                f"`callback_on_step_end_tensor_inputs` has to be in {self._callback_tensor_inputs}, but found {[k for k in callback_on_step_end_tensor_inputs if k not in self._callback_tensor_inputs]}" # noqa: E501
             )
 
         # Check for consistency within positive prompt embeddings and sequence lengths

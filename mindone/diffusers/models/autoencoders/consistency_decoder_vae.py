@@ -20,7 +20,7 @@ from typing import Optional, Tuple, Union
 import numpy as np
 
 import mindspore as ms
-from mindspore import mint, nn
+from mindspore import mint
 
 from ...configuration_utils import ConfigMixin, register_to_config
 from ...schedulers import ConsistencyDecoderScheduler

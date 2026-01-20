@@ -15,6 +15,7 @@
 from typing import Any, Dict, List, Tuple
 
 import mindspore as ms
+from mindspore import mint
 
 from ...configuration_utils import FrozenDict
 from ...guiders import ClassifierFreeGuidance

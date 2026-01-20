@@ -18,7 +18,7 @@ from typing import Any, Dict, Optional, Tuple, Union
 
 import mindspore as ms
 import mindspore.nn as nn
-from mindspore import mint, ops
+from mindspore import mint
 
 from ...configuration_utils import ConfigMixin, register_to_config
 from ...loaders import FromOriginalModelMixin, PeftAdapterMixin

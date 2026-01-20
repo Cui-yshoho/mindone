@@ -68,7 +68,7 @@ class WanCoreDenoiseStep(SequentialPipelineBlocks):
 
 
 # wan2.1: image2video
-## image encoder
+# image encoder
 class WanImage2VideoImageEncoderStep(SequentialPipelineBlocks):
     model_name = "wan"
     block_classes = [WanImageResizeStep, WanImageEncoderStep]
@@ -81,7 +81,7 @@ class WanImage2VideoImageEncoderStep(SequentialPipelineBlocks):
         )
 
 
-## vae encoder
+# vae encoder
 class WanImage2VideoVaeImageEncoderStep(SequentialPipelineBlocks):
     model_name = "wan"
     block_classes = [WanImageResizeStep, WanVaeImageEncoderStep]
@@ -92,7 +92,7 @@ class WanImage2VideoVaeImageEncoderStep(SequentialPipelineBlocks):
         return "Image2Video Vae Image Encoder step that resize the image and encode the first frame image to its latent representation"
 
 
-## denoise
+# denoise
 class WanImage2VideoCoreDenoiseStep(SequentialPipelineBlocks):
     block_classes = [
         WanTextInputStep,
@@ -128,7 +128,7 @@ class WanImage2VideoCoreDenoiseStep(SequentialPipelineBlocks):
 # wan2.1: FLF2v
 
 
-## image encoder
+# image encoder
 class WanFLF2VImageEncoderStep(SequentialPipelineBlocks):
     model_name = "wan"
     block_classes = [WanImageResizeStep, WanImageCropResizeStep, WanFirstLastFrameImageEncoderStep]
@@ -139,7 +139,7 @@ class WanFLF2VImageEncoderStep(SequentialPipelineBlocks):
         return "FLF2V Image Encoder step that resize and encode and encode the first and last frame images to generate the image embeddings"
 
 
-## vae encoder
+# vae encoder
 class WanFLF2VVaeImageEncoderStep(SequentialPipelineBlocks):
     model_name = "wan"
     block_classes = [WanImageResizeStep, WanImageCropResizeStep, WanFirstLastFrameVaeImageEncoderStep]
@@ -150,7 +150,7 @@ class WanFLF2VVaeImageEncoderStep(SequentialPipelineBlocks):
         return "FLF2V Vae Image Encoder step that resize and encode and encode the first and last frame images to generate the latent conditions"
 
 
-## denoise
+# denoise
 class WanFLF2VCoreDenoiseStep(SequentialPipelineBlocks):
     block_classes = [
         WanTextInputStep,
@@ -184,7 +184,7 @@ class WanFLF2VCoreDenoiseStep(SequentialPipelineBlocks):
 
 
 # wan2.1: auto blocks
-## image encoder
+# image encoder
 class WanAutoImageEncoderStep(AutoPipelineBlocks):
     block_classes = [WanFLF2VImageEncoderStep, WanImage2VideoImageEncoderStep]
     block_names = ["flf2v_image_encoder", "image2video_image_encoder"]
@@ -201,7 +201,7 @@ class WanAutoImageEncoderStep(AutoPipelineBlocks):
         )
 
 
-## vae encoder
+# vae encoder
 class WanAutoVaeImageEncoderStep(AutoPipelineBlocks):
     block_classes = [WanFLF2VVaeImageEncoderStep, WanImage2VideoVaeImageEncoderStep]
     block_names = ["flf2v_vae_image_encoder", "image2video_vae_image_encoder"]
@@ -218,7 +218,7 @@ class WanAutoVaeImageEncoderStep(AutoPipelineBlocks):
         )
 
 
-## denoise
+# denoise
 class WanAutoDenoiseStep(AutoPipelineBlocks):
     block_classes = [
         WanFLF2VCoreDenoiseStep,
@@ -269,7 +269,7 @@ class WanAutoBlocks(SequentialPipelineBlocks):
 # wan2.2: text2vid
 
 
-## denoise
+# denoise
 class Wan22CoreDenoiseStep(SequentialPipelineBlocks):
     block_classes = [
         WanTextInputStep,
@@ -292,7 +292,7 @@ class Wan22CoreDenoiseStep(SequentialPipelineBlocks):
 
 
 # wan2.2: image2video
-## denoise
+# denoise
 class Wan22Image2VideoCoreDenoiseStep(SequentialPipelineBlocks):
     block_classes = [
         WanTextInputStep,

@@ -17,7 +17,7 @@ import functools
 import inspect
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
 import mindspore as ms
 from mindspore import mint, ops

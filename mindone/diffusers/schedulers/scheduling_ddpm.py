@@ -149,7 +149,8 @@ class DDPMScheduler(SchedulerMixin, ConfigMixin):
             The beta schedule, a mapping from a beta range to a sequence of betas for stepping the model.
         trained_betas (`np.ndarray`, *optional*):
             An array of betas to pass directly to the constructor without using `beta_start` and `beta_end`.
-        variance_type (`"fixed_small"`, `"fixed_small_log"`, `"fixed_large"`, `"fixed_large_log"`, `"learned"`, or `"learned_range"`, defaults to `"fixed_small"`):
+        variance_type (`"fixed_small"`, `"fixed_small_log"`, `"fixed_large"`, `"fixed_large_log"`, `"learned"`,
+            or `"learned_range"`, defaults to `"fixed_small"`):
             Clip the variance when adding noise to the denoised sample.
         clip_sample (`bool`, defaults to `True`):
             Clip the predicted sample for numerical stability.
