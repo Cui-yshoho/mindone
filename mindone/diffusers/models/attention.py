@@ -220,6 +220,7 @@ class AttentionModuleMixin:
 
         self.fused_projections = True
 
+    @ms._no_grad()
     def unfuse_projections(self):
         """
         Unfuse the query, key, and value projections back to separate projections.

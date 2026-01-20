@@ -27,6 +27,8 @@ Key Features:
         [2025/11/12]
         - **scaled_dot_product_attention**: Always custom due to framework limitations.
         - **DeviceMesh**: Always custom due to framework limitations.
+        [2025/11/27]
+        - **cartesian_prod**: Always custom due to framework limitations.
         [2025/12/15]
         - **center_crop**: Always custom due to framework limitations.
 
@@ -927,3 +929,11 @@ def center_crop(img: ms.Tensor, output_size: Union[int, List[int], Tuple[int, in
     crop_left = int(mint.round(ms.tensor((image_width - crop_width) / 2.0)).item())
 
     return _crop(img, crop_top, crop_left, crop_height, crop_width)
+
+
+def cartesian_prod(*tensors):
+    """
+    Equivalence of `torch.cartesian_prod`
+    """
+    grids = mint.meshgrid(*tensors, indexing="ij")
+    return mint.stack(tuple(grid.reshape(-1) for grid in grids), dim=1)

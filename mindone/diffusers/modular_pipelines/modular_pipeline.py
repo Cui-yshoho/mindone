@@ -2280,7 +2280,7 @@ class ModularPipeline(ConfigMixin, PushToHubMixin):
         # pull out and resolve the stored type_hint
         lib_name, cls_name = spec_dict.pop("type_hint")
         if lib_name is not None and cls_name is not None:
-            if "Tokenizer" not in cls_name:
+            if "Tokenizer" not in cls_name and "Processor" not in cls_name:
                 lib_name = f"mindone.{lib_name}"
             type_hint = simple_get_class_obj(lib_name, cls_name)
         else:

@@ -4922,7 +4922,6 @@ class Flux2LoraLoaderMixin(LoraBaseMixin):
         """
         See [`~loaders.StableDiffusionLoraLoaderMixin.load_lora_weights`] for more details.
         """
-
         # if a dict is passed, copy it instead of modifying it inplace
         if isinstance(pretrained_model_name_or_path_or_dict, dict):
             pretrained_model_name_or_path_or_dict = pretrained_model_name_or_path_or_dict.copy()
@@ -4958,7 +4957,6 @@ class Flux2LoraLoaderMixin(LoraBaseMixin):
         """
         See [`~loaders.StableDiffusionLoraLoaderMixin.load_lora_into_unet`] for more details.
         """
-
         # Load the layers corresponding to transformer.
         logger.info(f"Loading {cls.transformer_name}.")
         transformer.load_lora_adapter(
