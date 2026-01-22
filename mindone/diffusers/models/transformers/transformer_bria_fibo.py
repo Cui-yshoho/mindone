@@ -593,7 +593,7 @@ class BriaFiboTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, From
         for index_block, block in enumerate(self.transformer_blocks):
             current_text_encoder_layer = text_encoder_layers[block_id]
             encoder_hidden_states = mint.cat(
-                [encoder_hidden_states[:, :, : self.inner_dim // 2], current_text_encoder_layer], dim=-1
+                [mint.split(encoder_hidden_states, self.inner_dim // 2, dim=-1)[0], current_text_encoder_layer], dim=-1
             )
             block_id += 1
             encoder_hidden_states, hidden_states = block(
@@ -604,10 +604,11 @@ class BriaFiboTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, From
                 joint_attention_kwargs=joint_attention_kwargs,
             )
 
-        for index_block, block in enumerate(self.single_transformer_blocks):
+        for index_block in range(self.config["num_single_layers"]):
+            block = self.single_transformer_blocks[index_block]
             current_text_encoder_layer = text_encoder_layers[block_id]
             encoder_hidden_states = mint.cat(
-                [encoder_hidden_states[:, :, : self.inner_dim // 2], current_text_encoder_layer], dim=-1
+                [mint.split(encoder_hidden_states, self.inner_dim // 2, dim=-1)[0], current_text_encoder_layer], dim=-1
             )
             block_id += 1
             hidden_states = mint.cat([encoder_hidden_states, hidden_states], dim=1)
@@ -618,8 +619,14 @@ class BriaFiboTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, From
                 joint_attention_kwargs=joint_attention_kwargs,
             )
 
-            encoder_hidden_states = hidden_states[:, : encoder_hidden_states.shape[1], ...]
-            hidden_states = hidden_states[:, encoder_hidden_states.shape[1] :, ...]
+            # encoder_hidden_states = hidden_states[:, : encoder_hidden_states.shape[1], ...]
+            # hidden_states = hidden_states[:, encoder_hidden_states.shape[1] :, ...]
+            encoder_hidden_states = mint.split(hidden_states, encoder_hidden_states.shape[1], dim=1)[0]
+            hidden_states = mint.split(
+                hidden_states,
+                (encoder_hidden_states.shape[1], hidden_states.shape[1] - encoder_hidden_states.shape[1]),
+                dim=1,
+            )[1]
 
         hidden_states = self.norm_out(hidden_states, temb)
         output = self.proj_out(hidden_states)

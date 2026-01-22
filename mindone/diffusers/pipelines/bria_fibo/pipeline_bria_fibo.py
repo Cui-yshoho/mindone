@@ -671,7 +671,7 @@ class BriaFiboPipeline(DiffusionPipeline):
                     hidden_states=latent_model_input,
                     timestep=timestep,
                     encoder_hidden_states=prompt_embeds,
-                    text_encoder_layers=prompt_layers,
+                    text_encoder_layers=ms.mutable(prompt_layers),
                     joint_attention_kwargs=self.joint_attention_kwargs,
                     return_dict=False,
                     txt_ids=text_ids,
